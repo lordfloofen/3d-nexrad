@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D NEXRAD Viewer</title>
+  <link rel="stylesheet" href="./style.css" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%2300d4ff'/><circle cx='50' cy='50' r='30' fill='%23051428'/><circle cx='50' cy='50' r='15' fill='%2300d4ff'/></svg>" />
+</head>
+<body>
+  <div id="app">
+    <canvas id="scene"></canvas>
+
+    <header id="topbar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <span class="brand-text">3D NEXRAD Viewer</span>
+      </div>
+      <div class="topbar-info">
+        <span id="volume-label">Synthetic demo volume — load a Level II file to view real data</span>
+      </div>
+    </header>
+
+    <aside id="panel">
+      <section class="panel-section">
+        <h2>Data source</h2>
+        <label class="file-input">
+          <input type="file" id="file-input" accept=".bz2,.ar2v,.gz,*/*" />
+          <span class="file-input-label">Upload Level II file</span>
+          <small>NEXRAD Archive II (e.g. KTLX20240515_223000_V06)</small>
+        </label>
+        <button id="demo-btn" class="btn btn-ghost">Reload synthetic demo</button>
+        <details class="hint">
+          <summary>Where do I get NEXRAD files?</summary>
+          <p>Public archive on AWS:<br>
+            <code>noaa-nexrad-level2</code> S3 bucket.</p>
+          <p>Browse via
+            <a href="https://noaa-nexrad-level2.s3.amazonaws.com/index.html" target="_blank" rel="noopener">the index</a>,
+            download a <code>*_V06</code> file, then drop it in above.
+          </p>
+        </details>
+      </section>
+
+      <section class="panel-section">
+        <h2>Display</h2>
+        <label class="slider-row">
+          <span>dBZ threshold <em id="threshold-value">15</em></span>
+          <input type="range" id="threshold" min="-30" max="75" step="1" value="15" />
+        </label>
+        <label class="slider-row">
+          <span>Vertical exaggeration <em id="vexag-value">4×</em></span>
+          <input type="range" id="vexag" min="1" max="15" step="0.5" value="4" />
+        </label>
+        <label class="slider-row">
+          <span>Point size <em id="psize-value">2.0</em></span>
+          <input type="range" id="psize" min="0.5" max="6" step="0.1" value="2.0" />
+        </label>
+        <label class="slider-row">
+          <span>Range gate stride <em id="stride-value">2</em></span>
+          <input type="range" id="stride" min="1" max="8" step="1" value="2" />
+        </label>
+        <label class="check-row">
+          <input type="checkbox" id="show-ground" checked />
+          <span>Show ground grid</span>
+        </label>
+        <label class="check-row">
+          <input type="checkbox" id="show-rings" checked />
+          <span>Show range rings (50 km)</span>
+        </label>
+        <label class="check-row">
+          <input type="checkbox" id="auto-rotate" />
+          <span>Auto-rotate camera</span>
+        </label>
+      </section>
+
+      <section class="panel-section">
+        <h2>Volume</h2>
+        <ul id="volume-stats" class="stats">
+          <li><span>Station</span><b id="stat-station">—</b></li>
+          <li><span>Tilts</span><b id="stat-tilts">—</b></li>
+          <li><span>Gates</span><b id="stat-gates">—</b></li>
+          <li><span>Max dBZ</span><b id="stat-max">—</b></li>
+          <li><span>Points</span><b id="stat-points">—</b></li>
+        </ul>
+      </section>
+
+      <section class="panel-section legend-section">
+        <h2>Reflectivity (dBZ)</h2>
+        <div id="legend"></div>
+      </section>
+
+      <footer class="panel-foot">
+        <a href="https://github.com/lordfloofen/3d-nexrad" target="_blank" rel="noopener">Source on GitHub</a>
+      </footer>
+    </aside>
+
+    <div id="loader" class="hidden">
+      <div class="spinner"></div>
+      <div id="loader-text">Loading…</div>
+    </div>
+
+    <div id="toast" class="hidden"></div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
