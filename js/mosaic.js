@@ -8,7 +8,51 @@ import { STATIONS } from './stations.js';
 import { haversineKm, lonLatToEnuKm, beamHeightKm } from './geo.js';
 import { parseLevel2 } from './nexrad.js';
 
-const S3_BASE = 'https://noaa-nexrad-level2.s3.amazonaws.com';
+const S3_HOST = 'https://noaa-nexrad-level2.s3.amazonaws.com';
+
+// AWS hasn't published a CORS policy on the public NEXRAD bucket, so direct
+// browser fetches from another origin (e.g. github.io) are blocked. Allow the
+// user to route requests through a CORS proxy of their choice. Resolution
+// order: ?cors-proxy=<prefix> URL param > localStorage > window global. The
+// value is a URL prefix; the target S3 URL is appended URL-encoded, which
+// matches the convention used by corsproxy.io, allorigins, and most others.
+function readCorsProxy() {
+  try {
+    const params = new URL(window.location.href).searchParams;
+    if (params.has('cors-proxy')) return params.get('cors-proxy') || '';
+  } catch (_) { /* non-browser context */ }
+  try {
+    const stored = localStorage.getItem('nexrad-cors-proxy');
+    if (stored !== null) return stored;
+  } catch (_) { /* storage disabled */ }
+  if (typeof window !== 'undefined' && typeof window.NEXRAD_CORS_PROXY === 'string') {
+    return window.NEXRAD_CORS_PROXY;
+  }
+  return '';
+}
+
+const CORS_PROXY = readCorsProxy();
+
+function s3Url(path) {
+  const target = `${S3_HOST}${path}`;
+  return CORS_PROXY ? `${CORS_PROXY}${encodeURIComponent(target)}` : target;
+}
+
+async function corsFetch(url, label) {
+  try {
+    return await fetch(url);
+  } catch (err) {
+    // Browsers surface CORS rejections and offline as TypeError — disambiguate
+    // for the user by pointing at the proxy knob.
+    if (err instanceof TypeError) {
+      const hint = CORS_PROXY
+        ? `via proxy ${CORS_PROXY}`
+        : 'no CORS proxy set — append ?cors-proxy=https://corsproxy.io/? to the page URL (or set localStorage "nexrad-cors-proxy"). See README.';
+      throw new Error(`${label} blocked by CORS or network: ${hint}`);
+    }
+    throw err;
+  }
+}
 
 export function findNearbyStations(centerLat, centerLon, radiusKm, maxCount = 6) {
   return STATIONS
@@ -33,8 +77,8 @@ function timeFromKey(key) {
 }
 
 async function listKeys(prefix) {
-  const url = `${S3_BASE}/?list-type=2&prefix=${encodeURIComponent(prefix)}&max-keys=300`;
-  const res = await fetch(url);
+  const url = s3Url(`/?list-type=2&prefix=${encodeURIComponent(prefix)}&max-keys=300`);
+  const res = await corsFetch(url, `S3 list ${prefix}`);
   if (!res.ok) throw new Error(`S3 list failed (${res.status}) for ${prefix}`);
   const xml = await res.text();
   const doc = new DOMParser().parseFromString(xml, 'text/xml');
@@ -75,7 +119,7 @@ export async function findClosestKey(stationId, targetDate) {
 }
 
 async function fetchLevel2(key) {
-  const res = await fetch(`${S3_BASE}/${key}`);
+  const res = await corsFetch(s3Url(`/${key}`), `download ${key}`);
   if (!res.ok) throw new Error(`Download failed (${res.status}) for ${key}`);
   return new Uint8Array(await res.arrayBuffer()).buffer;
 }

@@ -30,6 +30,41 @@ NOAA publishes the full NEXRAD archive on AWS S3 in the public
 Pick a file, download it, and either drag it onto the page or use the upload
 button.
 
+## Multi-radar mosaic and CORS
+
+The mosaic mode fetches Level II files directly from S3 in the browser. AWS
+does not publish a CORS policy on the `noaa-nexrad-level2` bucket, so requests
+from another origin (e.g. `https://lordfloofen.github.io`) are blocked with
+`No 'Access-Control-Allow-Origin' header is present on the requested resource`.
+
+To work around this, point the app at a CORS proxy. In priority order it
+reads:
+
+1. URL query param: `?cors-proxy=<prefix>` (set to empty to disable)
+2. `localStorage` key `nexrad-cors-proxy`
+3. `window.NEXRAD_CORS_PROXY` global
+
+The value is a URL prefix; the target S3 URL is appended URL-encoded.
+
+Examples (any one of these works):
+
+```
+https://lordfloofen.github.io/3d-nexrad/?cors-proxy=https://corsproxy.io/?
+https://lordfloofen.github.io/3d-nexrad/?cors-proxy=https://api.allorigins.win/raw?url=
+```
+
+Or in the browser console:
+
+```js
+localStorage.setItem('nexrad-cors-proxy', 'https://corsproxy.io/?');
+```
+
+Public proxies are third-party services with rate limits and uptime caveats —
+for a stable deployment, host your own (a Cloudflare Worker or AWS Lambda
+Function URL doing a passthrough fetch is ~20 lines).
+
+The single-radar upload mode reads local files and is unaffected by CORS.
+
 ## Running locally
 
 It's a static site — any static file server works:
