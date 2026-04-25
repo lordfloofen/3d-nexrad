@@ -8,6 +8,8 @@
 //
 // Only what's needed for visualization is implemented.
 
+import { STATIONS } from './stations.js';
+
 let _bzip2Promise = null;
 
 async function getBzip2() {
@@ -22,21 +24,11 @@ async function getBzip2() {
   return _bzip2Promise;
 }
 
-const STATION_LOCATIONS = {
-  // A handful of common ICAO station coordinates (lat, lon, elev m).
-  // Used to label the volume; the renderer doesn't actually need them.
-  // Source: NWS RDA list (subset).
-  KTLX: { lat: 35.3331, lon: -97.2778, elev: 370 },
-  KFWS: { lat: 32.5731, lon: -97.3031, elev: 208 },
-  KAMA: { lat: 35.2334, lon: -101.7092, elev: 1093 },
-  KOUN: { lat: 35.2362, lon: -97.4622, elev: 384 },
-  KLOT: { lat: 41.6044, lon: -88.0847, elev: 202 },
-  KOKX: { lat: 40.8656, lon: -72.8639, elev: 26 },
-  KMUX: { lat: 37.1553, lon: -121.8983, elev: 1057 },
-  KLWX: { lat: 38.9753, lon: -77.4778, elev: 83 },
-  KATX: { lat: 48.1947, lon: -122.4956, elev: 151 },
-  KMIA: { lat: 25.6111, lon: -80.4128, elev: 4 },
-};
+const STATION_LOCATIONS = (() => {
+  const m = {};
+  for (const s of STATIONS) m[s.id] = { lat: s.lat, lon: s.lon, elev: s.elev };
+  return m;
+})();
 
 class BinReader {
   constructor(buf, offset = 0) {
@@ -282,9 +274,11 @@ export async function parseLevel2(arrayBuffer, filename = '') {
   }
 
   const r = new BinReader(u8);
+  // Volume header (24 bytes): 9-byte tape tag, 3-byte extension number,
+  // 4-byte modified Julian date, 4-byte ms of day, 4-byte ICAO.
   const tape = r.ascii(9);          // e.g. "AR2V0006."
   const versionStr = tape.slice(4, 8);
-  r.u32();                          // volume sequence number
+  r.ascii(3);                       // extension number (e.g. "574")
   r.u32();                          // modified Julian date
   r.u32();                          // milliseconds of day
   const station = r.ascii(4);
@@ -299,18 +293,24 @@ export async function parseLevel2(arrayBuffer, filename = '') {
   while (r.remaining() >= 4) {
     const ctrl = r.i32();
     if (ctrl === 0) break;
-    const compressed = ctrl < 0;
     const len = Math.abs(ctrl);
     if (len <= 0 || len > r.remaining()) break;
     const block = r.slice(len);
 
+    // The control word's sign nominally indicates bzip2 compression, but
+    // some AR2V0002+ records (notably the metadata record at the start)
+    // carry a positive control word despite being bzip2-compressed. Detect
+    // by the "BZh" magic instead so both conventions work.
+    const looksBzip2 = block.byteLength >= 3 &&
+      block[0] === 0x42 && block[1] === 0x5A && block[2] === 0x68;
+
     let decoded;
-    if (compressed) {
+    if (looksBzip2 && needsBzip) {
       try {
         decoded = new Uint8Array(Bzip2.decode(block));
       } catch (e) {
-        // try with a 4-byte skip — some records have an extra prefix
-        try { decoded = new Uint8Array(Bzip2.decode(block.subarray(0))); }
+        // Some records have a 4-byte length prefix before the bzip2 stream.
+        try { decoded = new Uint8Array(Bzip2.decode(block.subarray(4))); }
         catch { continue; }
       }
     } else {
