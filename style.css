@@ -91,6 +91,121 @@ html, body {
   border-radius: 4px;
 }
 
+.mode-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  background: rgba(0, 212, 255, 0.05);
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+}
+.mode-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 7px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+.mode-tab.active {
+  background: rgba(0, 212, 255, 0.18);
+  color: var(--accent);
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.2);
+}
+.mode-tab:hover:not(.active) { color: var(--text); }
+
+.mode-pane.hidden { display: none; }
+
+#mosaic-map {
+  width: 100%;
+  height: 200px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--panel-border);
+  background: #04111f;
+  margin-bottom: 8px;
+  cursor: crosshair;
+}
+.leaflet-container { background: #04111f; }
+.leaflet-control-attribution {
+  font-size: 9px !important;
+  background: rgba(0,0,0,0.5) !important;
+  color: #7da4c8 !important;
+}
+.leaflet-control-attribution a { color: #00d4ff !important; }
+
+.coord-row {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 2px 0;
+}
+
+input[type="datetime-local"] {
+  width: 100%;
+  background: rgba(0, 212, 255, 0.06);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: inherit;
+  color-scheme: dark;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #00d4ff, #4cffd5);
+  color: #02141f;
+  border: none;
+  font-weight: 600;
+  margin-top: 8px;
+}
+.btn-primary:hover { filter: brightness(1.1); background: linear-gradient(135deg, #00d4ff, #4cffd5); }
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: none;
+}
+
+.mt-6 { margin-top: 6px; }
+
+.stations-status {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  font-size: 11px;
+}
+.stations-status li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(125, 164, 200, 0.08);
+  color: var(--text-dim);
+}
+.stations-status li:last-child { border-bottom: none; }
+.stations-status .ss-id {
+  font-weight: 600;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  min-width: 44px;
+}
+.stations-status .ss-status {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.ss-status.ok { color: var(--accent-2); }
+.ss-status.err { color: var(--warn); }
+.ss-status.busy { color: var(--accent); }
+
 .panel-section { margin-bottom: 18px; }
 .panel-section h2 {
   font-size: 11px;

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>3D NEXRAD Viewer</title>
   <link rel="stylesheet" href="./style.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%2300d4ff'/><circle cx='50' cy='50' r='30' fill='%23051428'/><circle cx='50' cy='50' r='15' fill='%2300d4ff'/></svg>" />
 </head>
 <body>
@@ -17,30 +18,70 @@
         <span class="brand-text">3D NEXRAD Viewer</span>
       </div>
       <div class="topbar-info">
-        <span id="volume-label">Synthetic demo volume — load a Level II file to view real data</span>
+        <span id="volume-label">Synthetic demo volume — pick a mode below</span>
       </div>
     </header>
 
     <aside id="panel">
-      <section class="panel-section">
-        <h2>Data source</h2>
-        <label class="file-input">
-          <input type="file" id="file-input" accept=".bz2,.ar2v,.gz,*/*" />
-          <span class="file-input-label">Upload Level II file</span>
-          <small>NEXRAD Archive II (e.g. KTLX20240515_223000_V06)</small>
-        </label>
-        <button id="demo-btn" class="btn btn-ghost">Reload synthetic demo</button>
-        <details class="hint">
-          <summary>Where do I get NEXRAD files?</summary>
-          <p>Public archive on AWS:<br>
-            <code>noaa-nexrad-level2</code> S3 bucket.</p>
-          <p>Browse via
-            <a href="https://noaa-nexrad-level2.s3.amazonaws.com/index.html" target="_blank" rel="noopener">the index</a>,
-            download a <code>*_V06</code> file, then drop it in above.
-          </p>
-        </details>
-      </section>
+      <div class="mode-tabs">
+        <button class="mode-tab active" data-mode="single">Single radar</button>
+        <button class="mode-tab" data-mode="mosaic">Multi-radar mosaic</button>
+      </div>
 
+      <!-- ============== SINGLE RADAR ============== -->
+      <div class="mode-pane" data-mode="single">
+        <section class="panel-section">
+          <h2>Data source</h2>
+          <label class="file-input">
+            <input type="file" id="file-input" accept=".bz2,.ar2v,.gz,*/*" />
+            <span class="file-input-label">Upload Level II file</span>
+            <small>NEXRAD Archive II (e.g. KTLX20240515_223000_V06)</small>
+          </label>
+          <button id="demo-btn" class="btn btn-ghost">Reload synthetic demo</button>
+          <details class="hint">
+            <summary>Where do I get NEXRAD files?</summary>
+            <p>Public archive on AWS:<br>
+              <code>noaa-nexrad-level2</code> S3 bucket.</p>
+            <p>Browse via
+              <a href="https://noaa-nexrad-level2.s3.amazonaws.com/index.html" target="_blank" rel="noopener">the index</a>,
+              download a <code>*_V06</code> file, then drop it in above.
+            </p>
+          </details>
+        </section>
+      </div>
+
+      <!-- ============== MOSAIC ============== -->
+      <div class="mode-pane hidden" data-mode="mosaic">
+        <section class="panel-section">
+          <h2>Mosaic center</h2>
+          <div id="mosaic-map"></div>
+          <div class="coord-row">
+            <span id="mosaic-coords">Click the map to set a point</span>
+          </div>
+        </section>
+
+        <section class="panel-section">
+          <h2>Time (UTC)</h2>
+          <input type="datetime-local" id="mosaic-time" step="60" />
+          <button id="time-now-btn" class="btn btn-ghost mt-6">Use ~30 min ago</button>
+        </section>
+
+        <section class="panel-section">
+          <h2>Search</h2>
+          <label class="slider-row">
+            <span>Radius <em id="radius-value">250 km</em></span>
+            <input type="range" id="mosaic-radius" min="80" max="400" step="10" value="250" />
+          </label>
+          <label class="slider-row">
+            <span>Max stations <em id="maxstations-value">5</em></span>
+            <input type="range" id="mosaic-maxstations" min="2" max="8" step="1" value="5" />
+          </label>
+          <button id="mosaic-build" class="btn btn-primary" disabled>Build mosaic</button>
+          <ul id="mosaic-status" class="stations-status"></ul>
+        </section>
+      </div>
+
+      <!-- ============== SHARED DISPLAY CONTROLS ============== -->
       <section class="panel-section">
         <h2>Display</h2>
         <label class="slider-row">
@@ -65,7 +106,7 @@
         </label>
         <label class="check-row">
           <input type="checkbox" id="show-rings" checked />
-          <span>Show range rings (50 km)</span>
+          <span>Show range rings</span>
         </label>
         <label class="check-row">
           <input type="checkbox" id="auto-rotate" />
@@ -76,8 +117,9 @@
       <section class="panel-section">
         <h2>Volume</h2>
         <ul id="volume-stats" class="stats">
-          <li><span>Station</span><b id="stat-station">—</b></li>
-          <li><span>Tilts</span><b id="stat-tilts">—</b></li>
+          <li><span>Mode</span><b id="stat-mode">Single</b></li>
+          <li><span>Station(s)</span><b id="stat-station">—</b></li>
+          <li><span>Tilts / files</span><b id="stat-tilts">—</b></li>
           <li><span>Gates</span><b id="stat-gates">—</b></li>
           <li><span>Max dBZ</span><b id="stat-max">—</b></li>
           <li><span>Points</span><b id="stat-points">—</b></li>
@@ -102,6 +144,7 @@
     <div id="toast" class="hidden"></div>
   </div>
 
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script type="importmap">
     {
       "imports": {
