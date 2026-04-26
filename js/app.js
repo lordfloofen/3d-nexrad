@@ -340,7 +340,26 @@ function currentStoredProxy() {
   try { return localStorage.getItem('nexrad-cors-proxy'); } catch (_) { return null; }
 }
 
+// Remove ?cors-proxy from the URL so localStorage takes effect on next fetch.
+function stripCorsProxyParam() {
+  try {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('cors-proxy')) {
+      url.searchParams.delete('cors-proxy');
+      history.replaceState(null, '', url.toString());
+    }
+  } catch (_) {}
+}
+
 function initProxyInput() {
+  // Show the effective proxy value (URL param wins over localStorage/default).
+  try {
+    const params = new URL(window.location.href).searchParams;
+    if (params.has('cors-proxy')) {
+      $('proxy-input').value = params.get('cors-proxy') || '';
+      return;
+    }
+  } catch (_) {}
   const stored = currentStoredProxy();
   $('proxy-input').value = stored !== null ? stored : DEFAULT_CORS_PROXY;
 }
@@ -348,6 +367,7 @@ initProxyInput();
 
 $('proxy-save').addEventListener('click', () => {
   const val = $('proxy-input').value.trim();
+  stripCorsProxyParam();
   try {
     if (val) {
       localStorage.setItem('nexrad-cors-proxy', val);
@@ -362,6 +382,7 @@ $('proxy-save').addEventListener('click', () => {
 });
 
 $('proxy-reset').addEventListener('click', () => {
+  stripCorsProxyParam();
   try { localStorage.removeItem('nexrad-cors-proxy'); } catch (_) {}
   $('proxy-input').value = DEFAULT_CORS_PROXY;
   toast('CORS proxy reset to default.');
