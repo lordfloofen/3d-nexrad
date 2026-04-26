@@ -440,8 +440,12 @@ $('mosaic-grab-latest-btn').addEventListener('click', async () => {
     for (const r of results) if (r?.time && r.time.getTime() > bestT) bestT = r.time.getTime();
     if (!Number.isFinite(bestT)) throw new Error('No recent files found for any nearby station.');
     $('mosaic-time').value = formatTime(new Date(bestT));
+    // Hand off to the build path and await it. Using `.click()` here would
+    // be fire-and-forget — we'd re-enable Grab Latest while the build was
+    // still running, and a quick second click would change the picker time
+    // but find the build button still disabled and silently no-op.
     hideLoader();
-    $('mosaic-build').click();
+    await runMosaicBuild();
   } catch (err) {
     console.error(err);
     toast(`Failed: ${err.message}`, 'warn');
@@ -461,7 +465,7 @@ $('mosaic-maxstations').addEventListener('input', (e) => {
   refreshNearbyPreview();
 });
 
-$('mosaic-build').addEventListener('click', async () => {
+async function runMosaicBuild() {
   if (!mosaicState.center) return;
   const tStr = $('mosaic-time').value;
   if (!tStr) { toast('Pick a time first.', 'warn'); return; }
@@ -510,5 +514,7 @@ $('mosaic-build').addEventListener('click', async () => {
     hideLoader();
     $('mosaic-build').disabled = false;
   }
-});
+}
+
+$('mosaic-build').addEventListener('click', runMosaicBuild);
 
