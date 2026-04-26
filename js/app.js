@@ -2,7 +2,7 @@ import { RadarScene } from './renderer.js';
 import { buildSyntheticVolume } from './synthetic.js';
 import { parseLevel2 } from './nexrad.js';
 import { dbzToColor, legendStops } from './colormap.js';
-import { buildMosaic, findNearbyStations } from './mosaic.js';
+import { buildMosaic, findNearbyStations, DEFAULT_CORS_PROXY } from './mosaic.js';
 import { STATIONS } from './stations.js';
 
 const $ = (id) => document.getElementById(id);
@@ -333,4 +333,31 @@ $('mosaic-build').addEventListener('click', async () => {
     hideLoader();
     $('mosaic-build').disabled = false;
   }
+});
+
+// ---------- CORS proxy settings ----------
+function currentStoredProxy() {
+  try { return localStorage.getItem('nexrad-cors-proxy'); } catch (_) { return null; }
+}
+
+function initProxyInput() {
+  const stored = currentStoredProxy();
+  $('proxy-input').value = stored !== null ? stored : DEFAULT_CORS_PROXY;
+}
+initProxyInput();
+
+$('proxy-save').addEventListener('click', () => {
+  const val = $('proxy-input').value.trim();
+  try {
+    localStorage.setItem('nexrad-cors-proxy', val);
+    toast(val ? `CORS proxy saved: ${val}` : 'CORS proxy cleared — will use default.');
+  } catch (_) {
+    toast('Could not save to localStorage.', 'warn');
+  }
+});
+
+$('proxy-reset').addEventListener('click', () => {
+  try { localStorage.removeItem('nexrad-cors-proxy'); } catch (_) {}
+  $('proxy-input').value = DEFAULT_CORS_PROXY;
+  toast('CORS proxy reset to default.');
 });
