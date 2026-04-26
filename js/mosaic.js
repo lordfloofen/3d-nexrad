@@ -18,7 +18,8 @@ export const DEFAULT_CORS_PROXY = 'https://corsproxy.io/?';
 // Resolution order: ?cors-proxy=<prefix> URL param > localStorage
 // > window.NEXRAD_CORS_PROXY global > DEFAULT_CORS_PROXY.
 // The value is a URL prefix; the target S3 URL is appended URL-encoded.
-function readCorsProxy() {
+// Exported so the UI can display the effective proxy without duplicating this logic.
+export function readCorsProxy() {
   try {
     const params = new URL(window.location.href).searchParams;
     if (params.has('cors-proxy')) return params.get('cors-proxy') || '';

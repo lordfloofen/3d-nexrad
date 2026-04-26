@@ -2,7 +2,7 @@ import { RadarScene } from './renderer.js';
 import { buildSyntheticVolume } from './synthetic.js';
 import { parseLevel2 } from './nexrad.js';
 import { dbzToColor, legendStops } from './colormap.js';
-import { buildMosaic, findNearbyStations, DEFAULT_CORS_PROXY } from './mosaic.js';
+import { buildMosaic, findNearbyStations, DEFAULT_CORS_PROXY, readCorsProxy } from './mosaic.js';
 import { STATIONS } from './stations.js';
 
 const $ = (id) => document.getElementById(id);
@@ -336,10 +336,6 @@ $('mosaic-build').addEventListener('click', async () => {
 });
 
 // ---------- CORS proxy settings ----------
-function currentStoredProxy() {
-  try { return localStorage.getItem('nexrad-cors-proxy'); } catch (_) { return null; }
-}
-
 // Remove ?cors-proxy from the URL so localStorage takes effect on next fetch.
 function stripCorsProxyParam() {
   try {
@@ -352,16 +348,9 @@ function stripCorsProxyParam() {
 }
 
 function initProxyInput() {
-  // Show the effective proxy value (URL param wins over localStorage/default).
-  try {
-    const params = new URL(window.location.href).searchParams;
-    if (params.has('cors-proxy')) {
-      $('proxy-input').value = params.get('cors-proxy') || '';
-      return;
-    }
-  } catch (_) {}
-  const stored = currentStoredProxy();
-  $('proxy-input').value = stored !== null ? stored : DEFAULT_CORS_PROXY;
+  // Delegate entirely to readCorsProxy() so the panel always reflects the
+  // actual resolution order (URL param > localStorage > window global > default).
+  $('proxy-input').value = readCorsProxy();
 }
 initProxyInput();
 
@@ -384,6 +373,7 @@ $('proxy-save').addEventListener('click', () => {
 $('proxy-reset').addEventListener('click', () => {
   stripCorsProxyParam();
   try { localStorage.removeItem('nexrad-cors-proxy'); } catch (_) {}
-  $('proxy-input').value = DEFAULT_CORS_PROXY;
+  // readCorsProxy() now returns window.NEXRAD_CORS_PROXY or DEFAULT_CORS_PROXY.
+  $('proxy-input').value = readCorsProxy();
   toast('CORS proxy reset to default.');
 });
