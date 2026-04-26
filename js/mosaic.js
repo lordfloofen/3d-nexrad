@@ -95,7 +95,7 @@ export async function findClosestKey(stationId, targetDate) {
   return best ? { key: best, time: timeFromKey(best), diffMs: bestDiff } : null;
 }
 
-async function fetchLevel2(key) {
+export async function fetchLevel2(key) {
   const res = await corsFetch(s3Url(`/${key}`), `download ${key}`);
   if (!res.ok) throw new Error(`Download failed (${res.status}) for ${key}`);
   return new Uint8Array(await res.arrayBuffer()).buffer;

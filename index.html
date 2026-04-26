@@ -31,7 +31,22 @@
       <!-- ============== SINGLE RADAR ============== -->
       <div class="mode-pane" data-mode="single">
         <section class="panel-section">
-          <h2>Data source</h2>
+          <h2>Pick a radar</h2>
+          <div id="single-map"></div>
+          <div class="coord-row">
+            <span id="single-station-label">Click a station on the map</span>
+          </div>
+        </section>
+
+        <section class="panel-section">
+          <h2>Time (UTC)</h2>
+          <input type="datetime-local" id="single-time" step="60" />
+          <button id="single-time-now-btn" class="btn btn-ghost mt-6">Use ~30 min ago</button>
+          <button id="single-load-btn" class="btn btn-primary" disabled>Load latest scan</button>
+        </section>
+
+        <section class="panel-section">
+          <h2>Or upload a file</h2>
           <label class="file-input">
             <input type="file" id="file-input" accept=".bz2,.ar2v,.gz,*/*" />
             <span class="file-input-label">Upload Level II file</span>
@@ -39,13 +54,13 @@
           </label>
           <button id="demo-btn" class="btn btn-ghost">Reload synthetic demo</button>
           <details class="hint">
-            <summary>Where do I get NEXRAD files?</summary>
-            <p>Public archive on AWS, mirrored by Unidata:<br>
-              <code>unidata-nexrad-level2</code> S3 bucket.</p>
-            <p>Browse via
-              <a href="https://unidata-nexrad-level2.s3.amazonaws.com/index.html" target="_blank" rel="noopener">the index</a>,
-              download a <code>*_V06</code> file, then drop it in above.
+            <summary>About the data</summary>
+            <p>Stations stream to the
+              <code>unidata-nexrad-level2</code> S3 bucket.
+              Pick a station on the map to fetch the closest scan to
+              the chosen time, or upload a <code>*_V06</code> file directly.
             </p>
+            <p><a href="https://unidata-nexrad-level2.s3.amazonaws.com/index.html" target="_blank" rel="noopener">Browse the archive</a></p>
           </details>
         </section>
       </div>
@@ -102,7 +117,11 @@
           <input type="range" id="stride" min="1" max="8" step="1" value="2" />
         </label>
         <label class="check-row">
-          <input type="checkbox" id="show-ground" checked />
+          <input type="checkbox" id="show-basemap" checked />
+          <span>Show map basemap</span>
+        </label>
+        <label class="check-row">
+          <input type="checkbox" id="show-ground" />
           <span>Show ground grid</span>
         </label>
         <label class="check-row">
