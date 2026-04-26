@@ -2,7 +2,7 @@ import { RadarScene } from './renderer.js';
 import { buildSyntheticVolume } from './synthetic.js';
 import { parseLevel2 } from './nexrad.js';
 import { dbzToColor, legendStops } from './colormap.js';
-import { buildMosaic, findNearbyStations } from './mosaic.js';
+import { buildMosaic, findNearbyStations, findClosestKey, fetchLevel2 } from './mosaic.js';
 import { STATIONS } from './stations.js';
 
 const $ = (id) => document.getElementById(id);
@@ -83,6 +83,8 @@ function applyVolume(volume) {
 
 // ---------- Initial demo ----------
 applyVolume(buildSyntheticVolume({ seed: Math.floor(Math.random() * 1000) }));
+// Single-radar tab is active by default; init its picker map up front.
+queueMicrotask(() => ensureSingleMap());
 
 // ---------- Display controls (shared) ----------
 $('threshold').addEventListener('input', (e) => {
@@ -113,9 +115,11 @@ $('stride').addEventListener('input', (e) => {
     else if (scene.mode === 'mosaic') updateMosaicStats(scene.lastMosaic, info);
   }
 });
+$('show-basemap').addEventListener('change', (e) => scene.setShowBasemap(e.target.checked));
 $('show-ground').addEventListener('change', (e) => scene.setShowGround(e.target.checked));
 $('show-rings').addEventListener('change', (e) => scene.setShowRings(e.target.checked));
 $('auto-rotate').addEventListener('change', (e) => scene.setAutoRotate(e.target.checked));
+scene.setShowGround($('show-ground').checked);
 
 // ---------- Mode tabs ----------
 const tabs = document.querySelectorAll('.mode-tab');
@@ -126,10 +130,105 @@ tabs.forEach(tab => {
     const mode = tab.dataset.mode;
     panes.forEach(p => p.classList.toggle('hidden', p.dataset.mode !== mode));
     if (mode === 'mosaic') ensureMap();
+    else if (mode === 'single') ensureSingleMap();
   });
 });
 
-// ---------- Single-radar: file upload + demo ----------
+// ---------- Single-radar: map picker, file upload, demo ----------
+const singleState = {
+  map: null,
+  stationLayer: null,
+  selectedMarker: null,
+  station: null,
+};
+
+function ensureSingleMap() {
+  if (singleState.map || typeof L === 'undefined') {
+    if (singleState.map) setTimeout(() => singleState.map.invalidateSize(), 50);
+    return;
+  }
+  const map = L.map('single-map', {
+    center: [37.5, -97],
+    zoom: 4,
+    minZoom: 3,
+    maxZoom: 10,
+    zoomControl: true,
+    attributionControl: true,
+  });
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '© OpenStreetMap, © CARTO',
+    subdomains: 'abcd',
+    maxZoom: 19,
+  }).addTo(map);
+
+  const stationLayer = L.layerGroup().addTo(map);
+  for (const s of STATIONS) {
+    const marker = L.circleMarker([s.lat, s.lon], {
+      radius: 4,
+      color: '#ffd86b',
+      weight: 1,
+      fillColor: '#ffd86b',
+      fillOpacity: 0.55,
+    });
+    marker.bindTooltip(`${s.id} — ${s.name}`, { direction: 'top', offset: [0, -4] });
+    marker.on('click', () => selectSingleStation(s));
+    marker.addTo(stationLayer);
+  }
+
+  singleState.map = map;
+  singleState.stationLayer = stationLayer;
+  setTimeout(() => map.invalidateSize(), 60);
+}
+
+function selectSingleStation(station) {
+  singleState.station = station;
+  $('single-station-label').textContent = `${station.id} — ${station.name}`;
+  $('single-load-btn').disabled = false;
+  const map = singleState.map;
+  if (map) {
+    if (singleState.selectedMarker) singleState.selectedMarker.remove();
+    singleState.selectedMarker = L.circleMarker([station.lat, station.lon], {
+      radius: 9, color: '#4cffd5', weight: 2, fillColor: '#4cffd5', fillOpacity: 0.4,
+    }).addTo(map);
+    map.panTo([station.lat, station.lon], { animate: true });
+  }
+}
+
+function singleTargetTime() {
+  const v = $('single-time').value;
+  if (!v) return new Date(Date.now() - 30 * 60 * 1000);
+  const d = new Date(v + 'Z');
+  return Number.isNaN(d.getTime()) ? new Date(Date.now() - 30 * 60 * 1000) : d;
+}
+
+$('single-time').value = defaultTime();
+$('single-time-now-btn').addEventListener('click', () => { $('single-time').value = defaultTime(); });
+
+$('single-load-btn').addEventListener('click', async () => {
+  const station = singleState.station;
+  if (!station) return;
+  const target = singleTargetTime();
+  $('single-load-btn').disabled = true;
+  showLoader(`Finding scan for ${station.id}…`);
+  try {
+    const found = await findClosestKey(station.id, target);
+    if (!found) throw new Error(`No archived files found for ${station.id} near that time.`);
+    showLoader(`Downloading ${found.key.split('/').pop()}…`);
+    const buf = await fetchLevel2(found.key);
+    showLoader('Parsing Level II (decompressing radials)…');
+    const volume = await parseLevel2(buf, found.key);
+    applyVolume(volume);
+    const tStr = (volume.timestamp || found.time).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    toast(`Loaded ${station.id} • ${tStr} • ${volume.tilts.length} tilts.`);
+  } catch (err) {
+    console.error(err);
+    toast(`Failed: ${err.message}`, 'warn');
+  } finally {
+    hideLoader();
+    $('single-load-btn').disabled = false;
+  }
+});
+
 $('demo-btn').addEventListener('click', () => {
   applyVolume(buildSyntheticVolume({ seed: Math.floor(Math.random() * 1000) }));
   toast('Synthetic demo regenerated.');

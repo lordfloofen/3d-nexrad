@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { dbzToColor } from './colormap.js';
 import { beamHeightKm, lonLatToEnuKm } from './geo.js';
+import { createOsmGround } from './osm-ground.js';
 
 // World units = kilometers. Scene Y is up. East = +X, North = -Z.
 
@@ -36,13 +37,19 @@ export class RadarScene {
     this.scene.add(this.world);
 
     this.ground = this._makeGround(460, 46);
+    this.ground.visible = false;
     this.world.add(this.ground);
+    this.basemap = new THREE.Group();
+    this.basemap.visible = true;
+    this.world.add(this.basemap);
     this.rings = this._makeRangeRings([50, 100, 150, 200]);
     this.world.add(this.rings);
     this.compass = this._makeCompass(240);
     this.world.add(this.compass);
     this.markers = new THREE.Group();
     this.world.add(this.markers);
+    this._showBasemap = true;
+    this._basemapAttribution = null;
 
     this.points = null;
     this.mode = null;          // 'volume' | 'mosaic'
@@ -66,6 +73,11 @@ export class RadarScene {
   }
   setShowGround(v) { this.ground.visible = v; }
   setShowRings(v) { this.rings.visible = v; this.compass.visible = v; }
+  setShowBasemap(v) {
+    this._showBasemap = v;
+    this.basemap.visible = v;
+  }
+  getBasemapAttribution() { return this._basemapAttribution; }
 
   setOption(key, value) {
     this.options[key] = value;
@@ -89,6 +101,11 @@ export class RadarScene {
     this._clearPoints();
     this._clearMarkers();
     this._resizeDecorations(230);
+    if (Number.isFinite(volume?.lat) && Number.isFinite(volume?.lon)) {
+      this._setBasemap(volume.lat, volume.lon, 230);
+    } else {
+      this._clearBasemap();
+    }
 
     const { threshold, stride } = this.options;
     const positions = [];
@@ -137,6 +154,11 @@ export class RadarScene {
 
     const radius = Math.max(120, mosaic.radiusKm || 250);
     this._resizeDecorations(radius);
+    if (mosaic.center && Number.isFinite(mosaic.center.lat) && Number.isFinite(mosaic.center.lon)) {
+      this._setBasemap(mosaic.center.lat, mosaic.center.lon, radius);
+    } else {
+      this._clearBasemap();
+    }
 
     const { threshold } = this.options;
     const positions = [];
@@ -205,8 +227,39 @@ export class RadarScene {
     }
   }
 
+  _clearBasemap() {
+    while (this.basemap.children.length) {
+      const m = this.basemap.children.pop();
+      m.traverse?.((o) => {
+        o.geometry?.dispose?.();
+        if (o.material) {
+          o.material.map?.dispose?.();
+          o.material.dispose?.();
+        }
+      });
+    }
+    this._basemapAttribution = null;
+    this._basemapSig = null;
+  }
+
+  _setBasemap(lat, lon, radiusKm) {
+    const sig = `${lat.toFixed(4)}|${lon.toFixed(4)}|${Math.round(radiusKm)}`;
+    if (this._basemapSig === sig) {
+      this.basemap.visible = this._showBasemap;
+      return;
+    }
+    this._clearBasemap();
+    const { group, attribution } = createOsmGround(lat, lon, radiusKm);
+    this.basemap.add(group);
+    this.basemap.visible = this._showBasemap;
+    this._basemapAttribution = attribution;
+    this._basemapSig = sig;
+  }
+
   _resizeDecorations(radiusKm) {
     // Replace ground / rings / compass for the current scale.
+    const groundVisible = this.ground.visible;
+    const ringsVisible = this.rings.visible;
     [this.ground, this.rings, this.compass].forEach(g => this.world.remove(g));
     [this.ground, this.rings, this.compass].forEach(g =>
       g.traverse?.(o => { o.geometry?.dispose?.(); o.material?.dispose?.(); })
@@ -219,6 +272,9 @@ export class RadarScene {
     this.ground = this._makeGround(size, div);
     this.rings = this._makeRangeRings(rings);
     this.compass = this._makeCompass(radiusKm + 20);
+    this.ground.visible = groundVisible;
+    this.rings.visible = ringsVisible;
+    this.compass.visible = ringsVisible;
     this.world.add(this.ground);
     this.world.add(this.rings);
     this.world.add(this.compass);
