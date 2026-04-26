@@ -17,7 +17,9 @@ Live site: https://lordfloofen.github.io/3d-nexrad/ (after first Pages deploy)
 - Ships with a built-in synthetic storm generator so the page is alive on
   first visit.
 - Drop in a real NEXRAD Archive II file (`*_V06`, optionally `.bz2`-wrapped)
-  and it parses + renders client-side.
+  or a TDWR Archive II file (`*_V08`) and it parses + renders client-side.
+- The single-radar map and the mosaic both include FAA TDWR sites alongside
+  WSR-88D — TDWR markers are rendered cyan and WSR-88D yellow.
 
 ## Getting NEXRAD Level II data
 

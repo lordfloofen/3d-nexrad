@@ -1,8 +1,9 @@
 // Build a multi-radar 3D mosaic centered on a chosen lat/lon.
-// Discovers nearby WSR-88D stations, fetches each station's Level II file
-// closest in time to a target timestamp from the public AWS bucket, parses
-// the reflectivity volumes, reprojects every gate into a common ENU frame
-// centered on the click point, and max-merges into a sparse voxel grid.
+// Discovers nearby radars (WSR-88D and FAA TDWR), fetches each station's
+// Level II file closest in time to a target timestamp from the public AWS
+// bucket, parses the reflectivity volumes, reprojects every gate into a
+// common ENU frame centered on the click point, and max-merges into a
+// sparse voxel grid.
 
 import { STATIONS } from './stations.js';
 import { haversineKm, lonLatToEnuKm, beamHeightKm } from './geo.js';
@@ -64,10 +65,35 @@ async function listKeys(prefix) {
     const k = node.getElementsByTagName('Key')[0]?.textContent;
     if (!k) continue;
     if (k.includes('_MDM')) continue;       // metadata-only file
-    if (!/_V0[346]$|_V0[346]\.gz$/.test(k)) continue;
+    // V03/V04/V06 = WSR-88D Archive II builds, V08 = FAA TDWR Archive II.
+    if (!/_V0[3468]$|_V0[3468]\.gz$/.test(k)) continue;
     out.push(k);
   }
   return out;
+}
+
+// Find the most recent file for a station by walking back from "now" UTC
+// across calendar boundaries until we find a populated day (most stations
+// publish a scan every few minutes, so today's prefix is almost always
+// non-empty, but we tolerate the empty-day edge case around UTC midnight).
+export async function findLatestKey(stationId, maxDaysBack = 3) {
+  const dayMs = 24 * 3600 * 1000;
+  const now = Date.now();
+  for (let i = 0; i < maxDaysBack; i++) {
+    const d = new Date(now - i * dayMs);
+    let keys;
+    try { keys = await listKeys(dateToPrefix(d, stationId)); }
+    catch { keys = []; }
+    if (!keys.length) continue;
+    let best = null, bestT = -Infinity;
+    for (const k of keys) {
+      const t = timeFromKey(k);
+      if (!t) continue;
+      if (t.getTime() > bestT) { bestT = t.getTime(); best = k; }
+    }
+    if (best) return { key: best, time: timeFromKey(best) };
+  }
+  return null;
 }
 
 export async function findClosestKey(stationId, targetDate) {
@@ -185,7 +211,7 @@ export async function buildMosaic({
 }) {
   const stations = findNearbyStations(centerLat, centerLon, radiusKm, maxStations);
   if (!stations.length) {
-    throw new Error('No WSR-88D stations within search radius. Try a larger radius or a different point.');
+    throw new Error('No radar stations within search radius. Try a larger radius or a different point.');
   }
 
   onProgress({
@@ -211,7 +237,6 @@ export async function buildMosaic({
   }
 
   // Fetch + parse each volume sequentially so the loader can show progress.
-  const grid = new VoxelGrid(voxel.x, voxel.y, voxel.z);
   const center = { lat: centerLat, lon: centerLon, elev: centerElev };
   const ingested = [];
   for (let i = 0; i < usable.length; i++) {
@@ -223,8 +248,9 @@ export async function buildMosaic({
       const buf = await fetchLevel2(key);
       onProgress({ phase: 'parse', station, current: i + 1, total: usable.length });
       const volume = await parseLevel2(buf, key);
-      ingestVolume(grid, volume, station, center, { stride, minDbz });
-      ingested.push({ station, time, key, tilts: volume.tilts.length });
+      // Stash the parsed tilts so stride/threshold can be re-applied later
+      // without re-downloading or re-parsing the file.
+      ingested.push({ station, time, key, tilts: volume.tilts.length, volume });
     } catch (e) {
       onProgress({ phase: 'error', station, message: e.message });
     }
@@ -232,16 +258,38 @@ export async function buildMosaic({
 
   if (!ingested.length) throw new Error('Failed to load any radar volumes.');
 
-  onProgress({ phase: 'merge', message: `Merging ${grid.size.toLocaleString()} voxels`, voxelCount: grid.size });
-  const points = grid.toPoints();
-
-  return {
+  const mosaic = {
     center,
     targetTime,
     radiusKm,
     stations: ingested,
     skipped: keyResults.filter(r => r.error),
     voxelSize: voxel,
-    points,
+    points: [],
+    stride,
+    minDbz,
   };
+
+  onProgress({ phase: 'merge', message: 'Merging voxels…' });
+  revoxelizeMosaic(mosaic, { stride, minDbz });
+  onProgress({ phase: 'merge', message: `Merged ${mosaic.points.length.toLocaleString()} voxels`, voxelCount: mosaic.points.length });
+
+  return mosaic;
+}
+
+// Rebuild the mosaic's voxel grid from the per-station volumes already cached
+// on it. Used to apply a new stride or minimum-dBZ filter without re-fetching.
+export function revoxelizeMosaic(mosaic, { stride, minDbz } = {}) {
+  if (stride != null) mosaic.stride = stride;
+  if (minDbz != null) mosaic.minDbz = minDbz;
+  const grid = new VoxelGrid(mosaic.voxelSize.x, mosaic.voxelSize.y, mosaic.voxelSize.z);
+  for (const entry of mosaic.stations) {
+    if (!entry.volume) continue;
+    ingestVolume(grid, entry.volume, entry.station, mosaic.center, {
+      stride: mosaic.stride,
+      minDbz: mosaic.minDbz,
+    });
+  }
+  mosaic.points = grid.toPoints();
+  return mosaic;
 }
