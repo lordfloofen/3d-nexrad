@@ -429,7 +429,13 @@ $('mosaic-grab-latest-btn').addEventListener('click', async () => {
   $('mosaic-grab-latest-btn').disabled = true;
   showLoader('Finding latest scan…');
   try {
-    const results = await Promise.all(nearby.map(s => findLatestKey(s.id).catch(() => null)));
+    // We do NOT swallow per-station failures into nulls here: a transient
+    // S3/CORS error that happens to hit the station with the freshest scan
+    // would otherwise let a remaining station's older "latest" stand in
+    // for the true latest, and we'd auto-build a mosaic at a stale time.
+    // Any failure aborts the flow and surfaces a toast so the user can
+    // retry rather than silently get yesterday's data.
+    const results = await Promise.all(nearby.map(s => findLatestKey(s.id)));
     let bestT = -Infinity;
     for (const r of results) if (r?.time && r.time.getTime() > bestT) bestT = r.time.getTime();
     if (!Number.isFinite(bestT)) throw new Error('No recent files found for any nearby station.');
