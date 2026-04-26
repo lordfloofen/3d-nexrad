@@ -8,12 +8,18 @@ import { STATIONS } from './stations.js';
 import { haversineKm, lonLatToEnuKm, beamHeightKm } from './geo.js';
 import { parseLevel2 } from './nexrad.js';
 
-const S3_HOST = 'https://noaa-nexrad-level2.s3.amazonaws.com';
+// Use Unidata's NEXRAD Level II mirror instead of noaa-nexrad-level2:
+// (1) NOAA's bucket now rejects unsigned anonymous requests with 403, even for
+//     known objects, so it can't be used directly from the browser.
+// (2) Unidata's mirror has the same key layout (YYYY/MM/DD/STATION/...) and
+//     publishes a permissive CORS policy (Access-Control-Allow-Origin: *), so
+//     no proxy is needed by default. This matches what supercell-wx does.
+const S3_HOST = 'https://unidata-nexrad-level2.s3.amazonaws.com';
 
-// Default public CORS proxy used when the user hasn't configured one.
-// noaa-nexrad-level2.s3.amazonaws.com has no CORS policy, so all browser
-// fetches from another origin are blocked without a proxy.
-export const DEFAULT_CORS_PROXY = 'https://corsproxy.io/?';
+// No proxy by default; the bucket itself serves CORS headers. Users can still
+// override via the resolution chain in readCorsProxy() if they want to route
+// through one (e.g. a private mirror or a caching proxy).
+export const DEFAULT_CORS_PROXY = '';
 
 // Resolution order: ?cors-proxy=<prefix> URL param > localStorage
 // > window.NEXRAD_CORS_PROXY global > DEFAULT_CORS_PROXY.
@@ -49,8 +55,8 @@ async function corsFetch(url, label) {
     if (err instanceof TypeError) {
       const proxy = readCorsProxy();
       const hint = proxy
-        ? `via proxy ${proxy} — try a different proxy in the CORS Proxy settings panel`
-        : 'default proxy failed — try a different CORS proxy in the settings panel or append ?cors-proxy=<prefix> to the URL';
+        ? `via proxy ${proxy} — try clearing or changing it in the CORS Proxy settings panel`
+        : 'direct request to S3 failed — check your network, or set a CORS proxy in the settings panel';
       throw new Error(`${label} blocked by CORS or network: ${hint}`);
     }
     throw err;

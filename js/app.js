@@ -363,7 +363,7 @@ $('proxy-save').addEventListener('click', () => {
       localStorage.removeItem('nexrad-cors-proxy');
     }
     stripCorsProxyParam();
-    toast(val ? `CORS proxy saved: ${val}` : 'CORS proxy cleared — will use default.');
+    toast(val ? `CORS proxy saved: ${val}` : 'CORS proxy cleared — using direct S3 access.');
   } catch (_) {
     toast('Could not save to localStorage.', 'warn');
   }
@@ -372,7 +372,6 @@ $('proxy-save').addEventListener('click', () => {
 $('proxy-reset').addEventListener('click', () => {
   stripCorsProxyParam();
   try { localStorage.removeItem('nexrad-cors-proxy'); } catch (_) {}
-  // readCorsProxy() now returns window.NEXRAD_CORS_PROXY or DEFAULT_CORS_PROXY.
   $('proxy-input').value = readCorsProxy();
-  toast('CORS proxy reset to default.');
+  toast('CORS proxy reset to default (direct S3 access).');
 });

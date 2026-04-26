@@ -21,24 +21,29 @@ Live site: https://lordfloofen.github.io/3d-nexrad/ (after first Pages deploy)
 
 ## Getting NEXRAD Level II data
 
-NOAA publishes the full NEXRAD archive on AWS S3 in the public
-`noaa-nexrad-level2` bucket:
+The full NEXRAD archive is mirrored by Unidata in the public
+`unidata-nexrad-level2` S3 bucket (same key layout as NOAA's, but
+anonymously accessible and CORS-enabled — the same bucket
+[supercell-wx](https://github.com/dpaulat/supercell-wx) uses):
 
-- Browse: https://noaa-nexrad-level2.s3.amazonaws.com/index.html
+- Browse: https://unidata-nexrad-level2.s3.amazonaws.com/index.html
 - File pattern: `YYYY/MM/DD/{ICAO}/{ICAO}YYYYMMDD_HHMMSS_V06`
 
 Pick a file, download it, and either drag it onto the page or use the upload
 button.
 
+> NOAA's `noaa-nexrad-level2` bucket no longer permits unsigned anonymous
+> requests (every browser fetch returns 403), which is why this app fetches
+> from the Unidata mirror instead.
+
 ## Multi-radar mosaic and CORS
 
-The mosaic mode fetches Level II files directly from S3 in the browser. AWS
-does not publish a CORS policy on the `noaa-nexrad-level2` bucket, so requests
-from another origin (e.g. `https://lordfloofen.github.io`) are blocked with
-`No 'Access-Control-Allow-Origin' header is present on the requested resource`.
+The mosaic mode fetches Level II files directly from S3 in the browser. The
+Unidata mirror serves `Access-Control-Allow-Origin: *`, so **no CORS proxy is
+needed by default**.
 
-To work around this, point the app at a CORS proxy. In priority order it
-reads:
+If you want to route through a proxy anyway (e.g. a private mirror or a
+caching proxy), the app reads the proxy URL prefix in this order:
 
 1. URL query param: `?cors-proxy=<prefix>` (set to empty to disable)
 2. `localStorage` key `nexrad-cors-proxy`
@@ -46,11 +51,10 @@ reads:
 
 The value is a URL prefix; the target S3 URL is appended URL-encoded.
 
-Examples (any one of these works):
+Example:
 
 ```
 https://lordfloofen.github.io/3d-nexrad/?cors-proxy=https://corsproxy.io/?
-https://lordfloofen.github.io/3d-nexrad/?cors-proxy=https://api.allorigins.win/raw?url=
 ```
 
 Or in the browser console:
@@ -58,10 +62,6 @@ Or in the browser console:
 ```js
 localStorage.setItem('nexrad-cors-proxy', 'https://corsproxy.io/?');
 ```
-
-Public proxies are third-party services with rate limits and uptime caveats —
-for a stable deployment, host your own (a Cloudflare Worker or AWS Lambda
-Function URL doing a passthrough fetch is ~20 lines).
 
 The single-radar upload mode reads local files and is unaffected by CORS.
 

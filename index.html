@@ -40,10 +40,10 @@
           <button id="demo-btn" class="btn btn-ghost">Reload synthetic demo</button>
           <details class="hint">
             <summary>Where do I get NEXRAD files?</summary>
-            <p>Public archive on AWS:<br>
-              <code>noaa-nexrad-level2</code> S3 bucket.</p>
+            <p>Public archive on AWS, mirrored by Unidata:<br>
+              <code>unidata-nexrad-level2</code> S3 bucket.</p>
             <p>Browse via
-              <a href="https://noaa-nexrad-level2.s3.amazonaws.com/index.html" target="_blank" rel="noopener">the index</a>,
+              <a href="https://unidata-nexrad-level2.s3.amazonaws.com/index.html" target="_blank" rel="noopener">the index</a>,
               download a <code>*_V06</code> file, then drop it in above.
             </p>
           </details>
@@ -84,11 +84,13 @@
           <h2>CORS proxy</h2>
           <div class="proxy-row">
             <input type="url" id="proxy-input" class="proxy-input" spellcheck="false"
-              placeholder="https://corsproxy.io/?" />
+              placeholder="(none — direct S3 access)" />
             <button id="proxy-save" class="btn proxy-btn">Save</button>
           </div>
           <p class="proxy-hint">
-            Routes S3 requests through a proxy to bypass browser CORS restrictions.
+            Optional. The Unidata mirror serves CORS headers, so the browser
+            can fetch directly. Set a proxy URL prefix only if you need to
+            route through one.
             <button id="proxy-reset" class="proxy-link">Reset to default</button>
           </p>
         </section>
