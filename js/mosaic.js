@@ -92,14 +92,15 @@ async function listKeys(prefix) {
 // across calendar boundaries until we find a populated day (most stations
 // publish a scan every few minutes, so today's prefix is almost always
 // non-empty, but we tolerate the empty-day edge case around UTC midnight).
+// Listing failures are *not* swallowed — a transient S3/CORS/network error
+// on today's prefix would otherwise let us silently fall back to yesterday
+// and present stale data as "latest".
 export async function findLatestKey(stationId, maxDaysBack = 3) {
   const dayMs = 24 * 3600 * 1000;
   const now = Date.now();
   for (let i = 0; i < maxDaysBack; i++) {
     const d = new Date(now - i * dayMs);
-    let keys;
-    try { keys = await listKeys(dateToPrefix(d, stationId)); }
-    catch { keys = []; }
+    const keys = await listKeys(dateToPrefix(d, stationId));
     if (!keys.length) continue;
     let best = null, bestT = -Infinity;
     for (const k of keys) {
