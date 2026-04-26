@@ -36,32 +36,11 @@ button.
 > requests (every browser fetch returns 403), which is why this app fetches
 > from the Unidata mirror instead.
 
-## Multi-radar mosaic and CORS
+## Multi-radar mosaic
 
 The mosaic mode fetches Level II files directly from S3 in the browser. The
-Unidata mirror serves `Access-Control-Allow-Origin: *`, so **no CORS proxy is
-needed by default**.
-
-If you want to route through a proxy anyway (e.g. a private mirror or a
-caching proxy), the app reads the proxy URL prefix in this order:
-
-1. URL query param: `?cors-proxy=<prefix>` (set to empty to disable)
-2. `localStorage` key `nexrad-cors-proxy`
-3. `window.NEXRAD_CORS_PROXY` global
-
-The value is a URL prefix; the target S3 URL is appended URL-encoded.
-
-Example:
-
-```
-https://lordfloofen.github.io/3d-nexrad/?cors-proxy=https://corsproxy.io/?
-```
-
-Or in the browser console:
-
-```js
-localStorage.setItem('nexrad-cors-proxy', 'https://corsproxy.io/?');
-```
+Unidata mirror serves `Access-Control-Allow-Origin: *`, so the browser can
+fetch directly with no proxy.
 
 The single-radar upload mode reads local files and is unaffected by CORS.
 
