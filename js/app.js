@@ -349,8 +349,13 @@ initProxyInput();
 $('proxy-save').addEventListener('click', () => {
   const val = $('proxy-input').value.trim();
   try {
-    localStorage.setItem('nexrad-cors-proxy', val);
-    toast(val ? `CORS proxy saved: ${val}` : 'CORS proxy cleared — will use default.');
+    if (val) {
+      localStorage.setItem('nexrad-cors-proxy', val);
+      toast(`CORS proxy saved: ${val}`);
+    } else {
+      localStorage.removeItem('nexrad-cors-proxy');
+      toast('CORS proxy cleared — will use default.');
+    }
   } catch (_) {
     toast('Could not save to localStorage.', 'warn');
   }
