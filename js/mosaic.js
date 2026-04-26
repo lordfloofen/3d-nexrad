@@ -10,13 +10,16 @@ import { parseLevel2 } from './nexrad.js';
 
 const S3_HOST = 'https://noaa-nexrad-level2.s3.amazonaws.com';
 
-// AWS hasn't published a CORS policy on the public NEXRAD bucket, so direct
-// browser fetches from another origin (e.g. github.io) are blocked. Allow the
-// user to route requests through a CORS proxy of their choice. Resolution
-// order: ?cors-proxy=<prefix> URL param > localStorage > window global. The
-// value is a URL prefix; the target S3 URL is appended URL-encoded, which
-// matches the convention used by corsproxy.io, allorigins, and most others.
-function readCorsProxy() {
+// Default public CORS proxy used when the user hasn't configured one.
+// noaa-nexrad-level2.s3.amazonaws.com has no CORS policy, so all browser
+// fetches from another origin are blocked without a proxy.
+export const DEFAULT_CORS_PROXY = 'https://corsproxy.io/?';
+
+// Resolution order: ?cors-proxy=<prefix> URL param > localStorage
+// > window.NEXRAD_CORS_PROXY global > DEFAULT_CORS_PROXY.
+// The value is a URL prefix; the target S3 URL is appended URL-encoded.
+// Exported so the UI can display the effective proxy without duplicating this logic.
+export function readCorsProxy() {
   try {
     const params = new URL(window.location.href).searchParams;
     if (params.has('cors-proxy')) return params.get('cors-proxy') || '';
@@ -28,7 +31,7 @@ function readCorsProxy() {
   if (typeof window !== 'undefined' && typeof window.NEXRAD_CORS_PROXY === 'string') {
     return window.NEXRAD_CORS_PROXY;
   }
-  return '';
+  return DEFAULT_CORS_PROXY;
 }
 
 function s3Url(path) {
@@ -46,8 +49,8 @@ async function corsFetch(url, label) {
     if (err instanceof TypeError) {
       const proxy = readCorsProxy();
       const hint = proxy
-        ? `via proxy ${proxy}`
-        : 'no CORS proxy set — append ?cors-proxy=https://corsproxy.io/? to the page URL (or set localStorage "nexrad-cors-proxy"). See README.';
+        ? `via proxy ${proxy} — try a different proxy in the CORS Proxy settings panel`
+        : 'default proxy failed — try a different CORS proxy in the settings panel or append ?cors-proxy=<prefix> to the URL';
       throw new Error(`${label} blocked by CORS or network: ${hint}`);
     }
     throw err;
