@@ -31,11 +31,10 @@ function readCorsProxy() {
   return '';
 }
 
-const CORS_PROXY = readCorsProxy();
-
 function s3Url(path) {
   const target = `${S3_HOST}${path}`;
-  return CORS_PROXY ? `${CORS_PROXY}${encodeURIComponent(target)}` : target;
+  const proxy = readCorsProxy();
+  return proxy ? `${proxy}${encodeURIComponent(target)}` : target;
 }
 
 async function corsFetch(url, label) {
@@ -45,8 +44,9 @@ async function corsFetch(url, label) {
     // Browsers surface CORS rejections and offline as TypeError — disambiguate
     // for the user by pointing at the proxy knob.
     if (err instanceof TypeError) {
-      const hint = CORS_PROXY
-        ? `via proxy ${CORS_PROXY}`
+      const proxy = readCorsProxy();
+      const hint = proxy
+        ? `via proxy ${proxy}`
         : 'no CORS proxy set — append ?cors-proxy=https://corsproxy.io/? to the page URL (or set localStorage "nexrad-cors-proxy"). See README.';
       throw new Error(`${label} blocked by CORS or network: ${hint}`);
     }
