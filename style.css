@@ -395,47 +395,6 @@ input[type="datetime-local"] {
 }
 #toast.warn { border-color: var(--warn); }
 
-.proxy-row {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 6px;
-}
-.proxy-input {
-  flex: 1;
-  min-width: 0;
-  background: rgba(0, 212, 255, 0.06);
-  border: 1px solid var(--panel-border);
-  color: var(--text);
-  padding: 5px 8px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.proxy-input:focus { outline: none; border-color: var(--accent); }
-.proxy-btn {
-  flex-shrink: 0;
-  width: auto;
-  padding: 5px 10px;
-  font-size: 11px;
-}
-.proxy-hint {
-  margin: 0;
-  font-size: 11px;
-  color: var(--text-dim);
-  line-height: 1.5;
-}
-.proxy-link {
-  background: none;
-  border: none;
-  color: var(--accent-2);
-  font-size: 11px;
-  cursor: pointer;
-  padding: 0;
-  text-decoration: underline;
-  font-family: inherit;
-}
-.proxy-link:hover { color: var(--accent); }
-
 @media (max-width: 720px) {
   #panel {
     width: calc(100% - 28px);

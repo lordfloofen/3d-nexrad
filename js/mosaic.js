@@ -13,51 +13,19 @@ import { parseLevel2 } from './nexrad.js';
 //     known objects, so it can't be used directly from the browser.
 // (2) Unidata's mirror has the same key layout (YYYY/MM/DD/STATION/...) and
 //     publishes a permissive CORS policy (Access-Control-Allow-Origin: *), so
-//     no proxy is needed by default. This matches what supercell-wx does.
+//     the browser can fetch directly. This matches what supercell-wx does.
 const S3_HOST = 'https://unidata-nexrad-level2.s3.amazonaws.com';
 
-// No proxy by default; the bucket itself serves CORS headers. Users can still
-// override via the resolution chain in readCorsProxy() if they want to route
-// through one (e.g. a private mirror or a caching proxy).
-export const DEFAULT_CORS_PROXY = '';
-
-// Resolution order: ?cors-proxy=<prefix> URL param > localStorage
-// > window.NEXRAD_CORS_PROXY global > DEFAULT_CORS_PROXY.
-// The value is a URL prefix; the target S3 URL is appended URL-encoded.
-// Exported so the UI can display the effective proxy without duplicating this logic.
-export function readCorsProxy() {
-  try {
-    const params = new URL(window.location.href).searchParams;
-    if (params.has('cors-proxy')) return params.get('cors-proxy') || '';
-  } catch (_) { /* non-browser context */ }
-  try {
-    const stored = localStorage.getItem('nexrad-cors-proxy');
-    if (stored !== null) return stored;
-  } catch (_) { /* storage disabled */ }
-  if (typeof window !== 'undefined' && typeof window.NEXRAD_CORS_PROXY === 'string') {
-    return window.NEXRAD_CORS_PROXY;
-  }
-  return DEFAULT_CORS_PROXY;
-}
-
 function s3Url(path) {
-  const target = `${S3_HOST}${path}`;
-  const proxy = readCorsProxy();
-  return proxy ? `${proxy}${encodeURIComponent(target)}` : target;
+  return `${S3_HOST}${path}`;
 }
 
 async function corsFetch(url, label) {
   try {
     return await fetch(url);
   } catch (err) {
-    // Browsers surface CORS rejections and offline as TypeError — disambiguate
-    // for the user by pointing at the proxy knob.
     if (err instanceof TypeError) {
-      const proxy = readCorsProxy();
-      const hint = proxy
-        ? `via proxy ${proxy} — try clearing or changing it in the CORS Proxy settings panel`
-        : 'direct request to S3 failed — check your network, or set a CORS proxy in the settings panel';
-      throw new Error(`${label} blocked by CORS or network: ${hint}`);
+      throw new Error(`${label} blocked by CORS or network: direct request to S3 failed — check your network connection.`);
     }
     throw err;
   }
