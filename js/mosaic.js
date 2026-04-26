@@ -55,20 +55,36 @@ function timeFromKey(key) {
 }
 
 async function listKeys(prefix) {
-  const url = s3Url(`/?list-type=2&prefix=${encodeURIComponent(prefix)}&max-keys=300`);
-  const res = await corsFetch(url, `S3 list ${prefix}`);
-  if (!res.ok) throw new Error(`S3 list failed (${res.status}) for ${prefix}`);
-  const xml = await res.text();
-  const doc = new DOMParser().parseFromString(xml, 'text/xml');
+  // Page through ListObjectsV2 results until the day's prefix is exhausted.
+  // S3 caps a single page at 1000 keys; TDWR sites publish ~1440 scans/day,
+  // and S3 returns keys in ascending lexicographic order (which matches
+  // chronological order for our `STATIONyyyymmdd_HHMMSS_Vxx` naming), so a
+  // single un-paginated request would silently truncate to the *earliest*
+  // scans of the day and miss the actual latest one.
   const out = [];
-  for (const node of doc.getElementsByTagName('Contents')) {
-    const k = node.getElementsByTagName('Key')[0]?.textContent;
-    if (!k) continue;
-    if (k.includes('_MDM')) continue;       // metadata-only file
-    // V03/V04/V06 = WSR-88D Archive II builds, V08 = FAA TDWR Archive II.
-    if (!/_V0[3468]$|_V0[3468]\.gz$/.test(k)) continue;
-    out.push(k);
-  }
+  let token = null;
+  do {
+    const params = new URLSearchParams({
+      'list-type': '2',
+      prefix,
+      'max-keys': '1000',
+    });
+    if (token) params.set('continuation-token', token);
+    const res = await corsFetch(s3Url(`/?${params.toString()}`), `S3 list ${prefix}`);
+    if (!res.ok) throw new Error(`S3 list failed (${res.status}) for ${prefix}`);
+    const xml = await res.text();
+    const doc = new DOMParser().parseFromString(xml, 'text/xml');
+    for (const node of doc.getElementsByTagName('Contents')) {
+      const k = node.getElementsByTagName('Key')[0]?.textContent;
+      if (!k) continue;
+      if (k.includes('_MDM')) continue;       // metadata-only file
+      // V03/V04/V06 = WSR-88D Archive II builds, V08 = FAA TDWR Archive II.
+      if (!/_V0[3468]$|_V0[3468]\.gz$/.test(k)) continue;
+      out.push(k);
+    }
+    const truncated = doc.getElementsByTagName('IsTruncated')[0]?.textContent === 'true';
+    token = truncated ? (doc.getElementsByTagName('NextContinuationToken')[0]?.textContent || null) : null;
+  } while (token);
   return out;
 }
 
