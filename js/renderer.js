@@ -345,17 +345,22 @@ export class RadarScene {
   }
 
   _makeStationMarker(station, enu) {
-    // ENU east -> world +X, north -> world -Z, up -> world +Y.
+    // ENU east -> world +X, north -> world -Z, up -> world +Y. TDWR markers
+    // are tinted cyan and slightly smaller so they can be told apart from
+    // the yellow WSR-88D dots when both kinds contribute to a mosaic.
+    const isTdwr = station?.type === 'tdwr';
+    const color = isTdwr ? 0x7af0ff : 0xffd86b;
+    const dotRadius = isTdwr ? 0.9 : 1.2;
     const g = new THREE.Group();
     g.position.set(enu.e, enu.u, -enu.n);
     const dot = new THREE.Mesh(
-      new THREE.SphereGeometry(1.2, 12, 12),
-      new THREE.MeshBasicMaterial({ color: 0xffd86b })
+      new THREE.SphereGeometry(dotRadius, 12, 12),
+      new THREE.MeshBasicMaterial({ color })
     );
     g.add(dot);
     const stem = new THREE.Mesh(
       new THREE.CylinderGeometry(0.12, 0.12, 6, 8),
-      new THREE.MeshBasicMaterial({ color: 0xffd86b, transparent: true, opacity: 0.55 })
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.55 })
     );
     stem.position.y = 3;
     g.add(stem);

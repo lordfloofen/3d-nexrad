@@ -1,7 +1,10 @@
-// Subset of the WSR-88D network. Coordinates from the NWS RDA list (2024).
-// Not exhaustive; users can still center the mosaic anywhere — we just merge
-// whichever stations from this list fall inside the search radius.
+// Subset of the WSR-88D network plus the FAA TDWR network. Coordinates from
+// the NWS RDA list and FAA TDWR siting documentation. Not exhaustive; users
+// can still center the mosaic anywhere — we just merge whichever stations
+// from this list fall inside the search radius.
 //
+// `type` is 'wsr88d' for the National Weather Service S-band stations and
+// 'tdwr' for the FAA Terminal Doppler Weather Radar C-band stations.
 // elev is meters above MSL (radar antenna feedhorn elevation).
 
 export const STATIONS = [
@@ -153,9 +156,58 @@ export const STATIONS = [
   { id: 'KATX', name: 'Seattle, WA',           lat: 48.1947, lon: -122.4956, elev: 151 },
   { id: 'KOTX', name: 'Spokane, WA',           lat: 47.6803, lon: -117.6267, elev: 727 },
   { id: 'KLGX', name: 'Langley Hill, WA',      lat: 47.1167, lon: -124.1067, elev: 60 },
+
+  // ---- FAA TDWR (Terminal Doppler Weather Radar, C-band) ----
+  { id: 'TADW', name: 'Andrews AFB, MD',       lat: 38.6953, lon:  -76.8456, elev: 32,  type: 'tdwr' },
+  { id: 'TATL', name: 'Atlanta, GA',           lat: 33.6433, lon:  -84.2625, elev: 220, type: 'tdwr' },
+  { id: 'TBNA', name: 'Nashville, TN',         lat: 36.0058, lon:  -86.6614, elev: 173, type: 'tdwr' },
+  { id: 'TBOS', name: 'Boston, MA',            lat: 42.1583, lon:  -70.9333, elev: 31,  type: 'tdwr' },
+  { id: 'TBWI', name: 'Baltimore, MD',         lat: 39.0900, lon:  -76.6303, elev: 50,  type: 'tdwr' },
+  { id: 'TCLT', name: 'Charlotte, NC',         lat: 35.3372, lon:  -80.8839, elev: 230, type: 'tdwr' },
+  { id: 'TCMH', name: 'Columbus, OH',          lat: 40.0061, lon:  -82.7156, elev: 295, type: 'tdwr' },
+  { id: 'TCVG', name: 'Cincinnati, OH',        lat: 38.8975, lon:  -84.5808, elev: 270, type: 'tdwr' },
+  { id: 'TDAL', name: 'Dallas Love Field, TX', lat: 32.9244, lon:  -96.9683, elev: 137, type: 'tdwr' },
+  { id: 'TDAY', name: 'Dayton, OH',            lat: 40.0214, lon:  -84.1228, elev: 277, type: 'tdwr' },
+  { id: 'TDCA', name: 'Washington DCA, VA',    lat: 38.7594, lon:  -76.9617, elev: 18,  type: 'tdwr' },
+  { id: 'TDEN', name: 'Denver, CO',            lat: 39.7269, lon: -104.5269, elev: 1689, type: 'tdwr' },
+  { id: 'TDFW', name: 'Dallas/Ft Worth, TX',   lat: 33.0578, lon:  -96.9183, elev: 173, type: 'tdwr' },
+  { id: 'TDTW', name: 'Detroit, MI',           lat: 42.1117, lon:  -83.5147, elev: 226, type: 'tdwr' },
+  { id: 'TEWR', name: 'Newark, NJ',            lat: 40.5933, lon:  -74.2706, elev: 33,  type: 'tdwr' },
+  { id: 'TFLL', name: 'Fort Lauderdale, FL',   lat: 26.1428, lon:  -80.3439, elev: 4,   type: 'tdwr' },
+  { id: 'THOU', name: 'Houston Hobby, TX',     lat: 29.5161, lon:  -95.2417, elev: 14,  type: 'tdwr' },
+  { id: 'TIAH', name: 'Houston Bush, TX',      lat: 30.0644, lon:  -95.5675, elev: 36,  type: 'tdwr' },
+  { id: 'TICH', name: 'Wichita, KS',           lat: 37.5067, lon:  -97.4378, elev: 401, type: 'tdwr' },
+  { id: 'TIDS', name: 'Indianapolis, IN',      lat: 39.6378, lon:  -86.4350, elev: 247, type: 'tdwr' },
+  { id: 'TJFK', name: 'New York JFK, NY',      lat: 40.5894, lon:  -73.8806, elev: 27,  type: 'tdwr' },
+  { id: 'TJUA', name: 'San Juan, PR',          lat: 18.4742, lon:  -66.1789, elev: 50,  type: 'tdwr' },
+  { id: 'TLAS', name: 'Las Vegas, NV',         lat: 36.1414, lon: -115.0078, elev: 580, type: 'tdwr' },
+  { id: 'TLVE', name: 'Cleveland, OH',         lat: 41.2897, lon:  -82.0078, elev: 230, type: 'tdwr' },
+  { id: 'TMCI', name: 'Kansas City, MO',       lat: 39.4986, lon:  -94.7397, elev: 309, type: 'tdwr' },
+  { id: 'TMCO', name: 'Orlando, FL',           lat: 28.3433, lon:  -81.3258, elev: 24,  type: 'tdwr' },
+  { id: 'TMDW', name: 'Chicago Midway, IL',    lat: 41.6533, lon:  -87.7300, elev: 200, type: 'tdwr' },
+  { id: 'TMEM', name: 'Memphis, TN',           lat: 34.8964, lon:  -89.9933, elev: 90,  type: 'tdwr' },
+  { id: 'TMIA', name: 'Miami, FL',             lat: 25.7575, lon:  -80.4917, elev: 4,   type: 'tdwr' },
+  { id: 'TMKE', name: 'Milwaukee, WI',         lat: 42.8194, lon:  -88.0464, elev: 230, type: 'tdwr' },
+  { id: 'TMSP', name: 'Minneapolis, MN',       lat: 44.8714, lon:  -92.9333, elev: 274, type: 'tdwr' },
+  { id: 'TMSY', name: 'New Orleans, LA',       lat: 30.0231, lon:  -90.4031, elev: 4,   type: 'tdwr' },
+  { id: 'TOKC', name: 'Oklahoma City, OK',     lat: 35.2761, lon:  -97.5097, elev: 380, type: 'tdwr' },
+  { id: 'TORD', name: 'Chicago O\'Hare, IL',   lat: 41.7858, lon:  -87.8589, elev: 201, type: 'tdwr' },
+  { id: 'TPBI', name: 'West Palm Beach, FL',   lat: 26.6886, lon:  -80.2725, elev: 5,   type: 'tdwr' },
+  { id: 'TPHL', name: 'Philadelphia, PA',      lat: 39.9528, lon:  -75.0700, elev: 12,  type: 'tdwr' },
+  { id: 'TPHX', name: 'Phoenix, AZ',           lat: 33.4197, lon: -112.1633, elev: 339, type: 'tdwr' },
+  { id: 'TPIT', name: 'Pittsburgh, PA',        lat: 40.5008, lon:  -80.4867, elev: 393, type: 'tdwr' },
+  { id: 'TRDU', name: 'Raleigh-Durham, NC',    lat: 36.0014, lon:  -78.6975, elev: 122, type: 'tdwr' },
+  { id: 'TSDF', name: 'Louisville, KY',        lat: 38.0222, lon:  -85.6403, elev: 218, type: 'tdwr' },
+  { id: 'TSLC', name: 'Salt Lake City, UT',    lat: 40.9697, lon: -111.9300, elev: 1290, type: 'tdwr' },
+  { id: 'TTPA', name: 'Tampa, FL',             lat: 27.8597, lon:  -82.5183, elev: 7,   type: 'tdwr' },
+  { id: 'TTUL', name: 'Tulsa, OK',             lat: 36.0708, lon:  -95.8264, elev: 213, type: 'tdwr' },
 ];
 
-// strip the placeholder rows used as section markers
+// Strip placeholder rows used as section markers, and default missing types to
+// 'wsr88d' so callers can rely on the field always being set.
 for (let i = STATIONS.length - 1; i >= 0; i--) {
   if (!STATIONS[i].name) STATIONS.splice(i, 1);
+}
+for (const s of STATIONS) {
+  if (!s.type) s.type = 'wsr88d';
 }

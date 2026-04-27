@@ -2,7 +2,7 @@ import { RadarScene } from './renderer.js';
 import { buildSyntheticVolume } from './synthetic.js';
 import { parseLevel2 } from './nexrad.js';
 import { dbzToColor, legendStops } from './colormap.js';
-import { buildMosaic, findNearbyStations, findClosestKey, fetchLevel2 } from './mosaic.js';
+import { buildMosaic, findNearbyStations, findClosestKey, findLatestKey, fetchLevel2, revoxelizeMosaic } from './mosaic.js';
 import { STATIONS } from './stations.js';
 
 const $ = (id) => document.getElementById(id);
@@ -106,13 +106,30 @@ $('psize').addEventListener('input', (e) => {
   $('psize-value').textContent = v.toFixed(1);
   scene.setOption('pointSize', v);
 });
+// In single-radar mode the stride is applied at render time, so it's cheap
+// and we re-render every input event. In mosaic mode the stride controls
+// gate decimation during voxel ingest, so we have to rebuild the voxel grid
+// from the cached per-station volumes — debounce so we only do that once
+// the user stops dragging the slider.
+let mosaicStrideTimer = null;
 $('stride').addEventListener('input', (e) => {
   const v = parseInt(e.target.value, 10);
   $('stride-value').textContent = String(v);
+  if (scene.mode === 'mosaic' && scene.lastMosaic) {
+    scene.options.stride = v;
+    clearTimeout(mosaicStrideTimer);
+    mosaicStrideTimer = setTimeout(() => {
+      const m = scene.lastMosaic;
+      if (!m) return;
+      revoxelizeMosaic(m, { stride: v });
+      const info = scene.setMosaic(m);
+      updateMosaicStats(m, info);
+    }, 120);
+    return;
+  }
   const info = scene.setOption('stride', v);
   if (info) {
     if (scene.mode === 'volume') updateVolumeStats(scene.lastVolume, info);
-    else if (scene.mode === 'mosaic') updateMosaicStats(scene.lastMosaic, info);
   }
 });
 $('show-basemap').addEventListener('change', (e) => scene.setShowBasemap(e.target.checked));
@@ -163,14 +180,17 @@ function ensureSingleMap() {
 
   const stationLayer = L.layerGroup().addTo(map);
   for (const s of STATIONS) {
+    const isTdwr = s.type === 'tdwr';
+    const color = isTdwr ? '#7af0ff' : '#ffd86b';
     const marker = L.circleMarker([s.lat, s.lon], {
-      radius: 4,
-      color: '#ffd86b',
+      radius: isTdwr ? 3 : 4,
+      color,
       weight: 1,
-      fillColor: '#ffd86b',
+      fillColor: color,
       fillOpacity: 0.55,
     });
-    marker.bindTooltip(`${s.id} — ${s.name}`, { direction: 'top', offset: [0, -4] });
+    const typeLabel = isTdwr ? 'TDWR' : 'WSR-88D';
+    marker.bindTooltip(`${s.id} — ${s.name} (${typeLabel})`, { direction: 'top', offset: [0, -4] });
     marker.on('click', () => selectSingleStation(s));
     marker.addTo(stationLayer);
   }
@@ -182,8 +202,10 @@ function ensureSingleMap() {
 
 function selectSingleStation(station) {
   singleState.station = station;
-  $('single-station-label').textContent = `${station.id} — ${station.name}`;
+  const typeLabel = station.type === 'tdwr' ? 'TDWR' : 'WSR-88D';
+  $('single-station-label').textContent = `${station.id} — ${station.name} (${typeLabel})`;
   $('single-load-btn').disabled = false;
+  $('single-grab-latest-btn').disabled = false;
   const map = singleState.map;
   if (map) {
     if (singleState.selectedMarker) singleState.selectedMarker.remove();
@@ -202,22 +224,24 @@ function singleTargetTime() {
 }
 
 $('single-time').value = defaultTime();
-$('single-time-now-btn').addEventListener('click', () => { $('single-time').value = defaultTime(); });
 
-$('single-load-btn').addEventListener('click', async () => {
+async function loadSingleScan({ findKey, label }) {
   const station = singleState.station;
   if (!station) return;
-  const target = singleTargetTime();
   $('single-load-btn').disabled = true;
-  showLoader(`Finding scan for ${station.id}…`);
+  $('single-grab-latest-btn').disabled = true;
+  showLoader(`Finding ${label} for ${station.id}…`);
   try {
-    const found = await findClosestKey(station.id, target);
-    if (!found) throw new Error(`No archived files found for ${station.id} near that time.`);
+    const found = await findKey();
+    if (!found) throw new Error(`No archived files found for ${station.id}.`);
     showLoader(`Downloading ${found.key.split('/').pop()}…`);
     const buf = await fetchLevel2(found.key);
     showLoader('Parsing Level II (decompressing radials)…');
     const volume = await parseLevel2(buf, found.key);
     applyVolume(volume);
+    // Reflect the loaded scan's timestamp back into the picker so the user
+    // can see exactly what they got and step from there.
+    if (found.time) $('single-time').value = formatTime(found.time);
     const tStr = (volume.timestamp || found.time).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
     toast(`Loaded ${station.id} • ${tStr} • ${volume.tilts.length} tilts.`);
   } catch (err) {
@@ -226,7 +250,23 @@ $('single-load-btn').addEventListener('click', async () => {
   } finally {
     hideLoader();
     $('single-load-btn').disabled = false;
+    $('single-grab-latest-btn').disabled = false;
   }
+}
+
+$('single-load-btn').addEventListener('click', () => {
+  const target = singleTargetTime();
+  loadSingleScan({
+    findKey: () => findClosestKey(singleState.station.id, target),
+    label: 'scan',
+  });
+});
+
+$('single-grab-latest-btn').addEventListener('click', () => {
+  loadSingleScan({
+    findKey: () => findLatestKey(singleState.station.id),
+    label: 'latest scan',
+  });
 });
 
 $('demo-btn').addEventListener('click', () => {
@@ -290,17 +330,20 @@ function ensureMap() {
     maxZoom: 19,
   }).addTo(map);
 
-  // Add static dots for known stations
+  // Add static dots for known stations (WSR-88D yellow, TDWR cyan)
   const stationLayer = L.layerGroup().addTo(map);
   for (const s of STATIONS) {
+    const isTdwr = s.type === 'tdwr';
+    const color = isTdwr ? '#7af0ff' : '#ffd86b';
+    const typeLabel = isTdwr ? 'TDWR' : 'WSR-88D';
     L.circleMarker([s.lat, s.lon], {
-      radius: 3,
-      color: '#ffd86b',
+      radius: isTdwr ? 2 : 3,
+      color,
       weight: 1,
-      fillColor: '#ffd86b',
+      fillColor: color,
       fillOpacity: 0.5,
     })
-      .bindTooltip(`${s.id} — ${s.name}`, { direction: 'top', offset: [0, -4] })
+      .bindTooltip(`${s.id} — ${s.name} (${typeLabel})`, { direction: 'top', offset: [0, -4] })
       .addTo(stationLayer);
   }
 
@@ -322,6 +365,7 @@ function setMosaicCenter(lat, lon) {
   refreshSearchCircle();
   refreshNearbyPreview();
   $('mosaic-build').disabled = false;
+  $('mosaic-grab-latest-btn').disabled = false;
 }
 
 function currentRadiusKm() { return parseInt($('mosaic-radius').value, 10); }
@@ -365,13 +409,52 @@ function setStationStatus(id, label, kind) {
 }
 
 // Default the time picker to ~30 minutes ago (UTC)
-function defaultTime() {
-  const d = new Date(Date.now() - 30 * 60 * 1000);
+function defaultTime() { return formatTime(new Date(Date.now() - 30 * 60 * 1000)); }
+function formatTime(d) {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 function pad(n) { return String(n).padStart(2, '0'); }
 $('mosaic-time').value = defaultTime();
-$('time-now-btn').addEventListener('click', () => { $('mosaic-time').value = defaultTime(); });
+
+// "Grab latest" finds the most recent scan published by any nearby station and
+// uses that as the mosaic target time, then auto-builds. We sample latest from
+// up to a few stations because individual radars can lag by several minutes.
+$('mosaic-grab-latest-btn').addEventListener('click', async () => {
+  if (mosaicBuildInFlight) { toast('A mosaic build is already running.', 'warn'); return; }
+  if (!mosaicState.center) { toast('Pick a mosaic center first.', 'warn'); return; }
+  const nearby = findNearbyStations(
+    mosaicState.center.lat, mosaicState.center.lon,
+    currentRadiusKm(), Math.min(3, currentMaxStations())
+  );
+  if (!nearby.length) { toast('No stations within search radius.', 'warn'); return; }
+  $('mosaic-grab-latest-btn').disabled = true;
+  showLoader('Finding latest scan…');
+  try {
+    // We do NOT swallow per-station failures into nulls here: a transient
+    // S3/CORS error that happens to hit the station with the freshest scan
+    // would otherwise let a remaining station's older "latest" stand in
+    // for the true latest, and we'd auto-build a mosaic at a stale time.
+    // Any failure aborts the flow and surfaces a toast so the user can
+    // retry rather than silently get yesterday's data.
+    const results = await Promise.all(nearby.map(s => findLatestKey(s.id)));
+    let bestT = -Infinity;
+    for (const r of results) if (r?.time && r.time.getTime() > bestT) bestT = r.time.getTime();
+    if (!Number.isFinite(bestT)) throw new Error('No recent files found for any nearby station.');
+    $('mosaic-time').value = formatTime(new Date(bestT));
+    // Hand off to the build path and await it. Using `.click()` here would
+    // be fire-and-forget — we'd re-enable Grab Latest while the build was
+    // still running, and a quick second click would change the picker time
+    // but find the build button still disabled and silently no-op.
+    hideLoader();
+    await runMosaicBuild();
+  } catch (err) {
+    console.error(err);
+    toast(`Failed: ${err.message}`, 'warn');
+    hideLoader();
+  } finally {
+    $('mosaic-grab-latest-btn').disabled = false;
+  }
+});
 
 $('mosaic-radius').addEventListener('input', (e) => {
   $('radius-value').textContent = `${e.target.value} km`;
@@ -383,7 +466,19 @@ $('mosaic-maxstations').addEventListener('input', (e) => {
   refreshNearbyPreview();
 });
 
-$('mosaic-build').addEventListener('click', async () => {
+// Guards against two `buildMosaic()` runs racing each other. The
+// `mosaic-build` button's disabled state would normally prevent that for
+// click-handler entry, but Grab Latest calls runMosaicBuild() directly —
+// without this flag, clicking Build then Grab Latest before the first
+// build finishes would launch a second full download/parse/voxelize pass
+// and the later promise to settle would clobber the earlier UI state.
+let mosaicBuildInFlight = false;
+
+async function runMosaicBuild() {
+  if (mosaicBuildInFlight) {
+    toast('A mosaic build is already running.', 'warn');
+    return;
+  }
   if (!mosaicState.center) return;
   const tStr = $('mosaic-time').value;
   if (!tStr) { toast('Pick a time first.', 'warn'); return; }
@@ -391,6 +486,7 @@ $('mosaic-build').addEventListener('click', async () => {
   const targetTime = new Date(tStr + 'Z');
   if (Number.isNaN(targetTime.getTime())) { toast('Invalid time.', 'warn'); return; }
 
+  mosaicBuildInFlight = true;
   refreshNearbyPreview();
   showLoader('Discovering nearby radars…');
   $('mosaic-build').disabled = true;
@@ -429,8 +525,11 @@ $('mosaic-build').addEventListener('click', async () => {
     console.error(err);
     toast(`Mosaic failed: ${err.message}`, 'warn');
   } finally {
+    mosaicBuildInFlight = false;
     hideLoader();
     $('mosaic-build').disabled = false;
   }
-});
+}
+
+$('mosaic-build').addEventListener('click', runMosaicBuild);
 

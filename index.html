@@ -41,16 +41,18 @@
         <section class="panel-section">
           <h2>Time (UTC)</h2>
           <input type="datetime-local" id="single-time" step="60" />
-          <button id="single-time-now-btn" class="btn btn-ghost mt-6">Use ~30 min ago</button>
-          <button id="single-load-btn" class="btn btn-primary" disabled>Load latest scan</button>
+          <button id="single-grab-latest-btn" class="btn btn-ghost mt-6" disabled>Grab latest</button>
+          <button id="single-load-btn" class="btn btn-primary" disabled>Load scan at time</button>
         </section>
 
         <section class="panel-section">
           <h2>Or upload a file</h2>
           <label class="file-input">
-            <input type="file" id="file-input" accept=".bz2,.ar2v,.gz,*/*" />
+            <!-- NEXRAD/TDWR Archive II files have no extension (e.g. KTLX20240515_223000_V06),
+                 so we accept anything and rely on parser detection. -->
+            <input type="file" id="file-input" />
             <span class="file-input-label">Upload Level II file</span>
-            <small>NEXRAD Archive II (e.g. KTLX20240515_223000_V06)</small>
+            <small>NEXRAD/TDWR Archive II (e.g. KTLX20240515_223000_V06)</small>
           </label>
           <button id="demo-btn" class="btn btn-ghost">Reload synthetic demo</button>
           <details class="hint">
@@ -78,7 +80,7 @@
         <section class="panel-section">
           <h2>Time (UTC)</h2>
           <input type="datetime-local" id="mosaic-time" step="60" />
-          <button id="time-now-btn" class="btn btn-ghost mt-6">Use ~30 min ago</button>
+          <button id="mosaic-grab-latest-btn" class="btn btn-ghost mt-6" disabled>Grab latest</button>
         </section>
 
         <section class="panel-section">
