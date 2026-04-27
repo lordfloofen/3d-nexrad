@@ -420,6 +420,7 @@ $('mosaic-time').value = defaultTime();
 // uses that as the mosaic target time, then auto-builds. We sample latest from
 // up to a few stations because individual radars can lag by several minutes.
 $('mosaic-grab-latest-btn').addEventListener('click', async () => {
+  if (mosaicBuildInFlight) { toast('A mosaic build is already running.', 'warn'); return; }
   if (!mosaicState.center) { toast('Pick a mosaic center first.', 'warn'); return; }
   const nearby = findNearbyStations(
     mosaicState.center.lat, mosaicState.center.lon,
@@ -465,7 +466,19 @@ $('mosaic-maxstations').addEventListener('input', (e) => {
   refreshNearbyPreview();
 });
 
+// Guards against two `buildMosaic()` runs racing each other. The
+// `mosaic-build` button's disabled state would normally prevent that for
+// click-handler entry, but Grab Latest calls runMosaicBuild() directly —
+// without this flag, clicking Build then Grab Latest before the first
+// build finishes would launch a second full download/parse/voxelize pass
+// and the later promise to settle would clobber the earlier UI state.
+let mosaicBuildInFlight = false;
+
 async function runMosaicBuild() {
+  if (mosaicBuildInFlight) {
+    toast('A mosaic build is already running.', 'warn');
+    return;
+  }
   if (!mosaicState.center) return;
   const tStr = $('mosaic-time').value;
   if (!tStr) { toast('Pick a time first.', 'warn'); return; }
@@ -473,6 +486,7 @@ async function runMosaicBuild() {
   const targetTime = new Date(tStr + 'Z');
   if (Number.isNaN(targetTime.getTime())) { toast('Invalid time.', 'warn'); return; }
 
+  mosaicBuildInFlight = true;
   refreshNearbyPreview();
   showLoader('Discovering nearby radars…');
   $('mosaic-build').disabled = true;
@@ -511,6 +525,7 @@ async function runMosaicBuild() {
     console.error(err);
     toast(`Mosaic failed: ${err.message}`, 'warn');
   } finally {
+    mosaicBuildInFlight = false;
     hideLoader();
     $('mosaic-build').disabled = false;
   }
