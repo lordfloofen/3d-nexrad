@@ -5,7 +5,7 @@
 // common ENU frame centered on the click point, and max-merges into a
 // sparse voxel grid.
 
-import { STATIONS } from './stations.js';
+import { STATIONS, stationRangeKm } from './stations.js';
 import { haversineKm, lonLatToEnuKm, beamHeightKm } from './geo.js';
 import { parseLevel2 } from './nexrad.js';
 
@@ -33,9 +33,16 @@ async function corsFetch(url, label) {
 }
 
 export function findNearbyStations(centerLat, centerLon, radiusKm, maxCount = 6) {
+  // A station qualifies only if the click point lies within both the user's
+  // search radius AND the station's own reflectivity reach. The per-type reach
+  // matters for TDWR: a TDWR 200 km from the point literally has no data
+  // there, so including it would (a) show a useless entry in the station
+  // list and (b) burn one of the maxCount slots that should have gone to a
+  // WSR-88D actually covering the point. Filtering before slice() ensures
+  // out-of-range TDWRs don't displace usable WSR-88Ds.
   return STATIONS
     .map(s => ({ ...s, distKm: haversineKm(centerLat, centerLon, s.lat, s.lon) }))
-    .filter(s => s.distKm <= radiusKm)
+    .filter(s => s.distKm <= radiusKm && s.distKm <= stationRangeKm(s))
     .sort((a, b) => a.distKm - b.distKm)
     .slice(0, maxCount);
 }
@@ -184,7 +191,10 @@ function ingestVolume(grid, volume, station, center, opts) {
 
   const stride = opts.stride || 2;
   const minDbz = opts.minDbz ?? 5;
-  const maxRangeKm = opts.maxRangeKm ?? 230;
+  // Per-station gate cutoff: TDWR gates only carry useful data out to ~90 km,
+  // so a flat 230 km cutoff would let stray long-range TDWR returns (or
+  // implausible AP/clutter at edge gates) leak into the mosaic.
+  const maxRangeKm = opts.maxRangeKm ?? stationRangeKm(station);
 
   for (const tilt of volume.tilts) {
     const elevRad = tilt.elevationDeg * Math.PI / 180;
