@@ -212,18 +212,33 @@ for (const s of STATIONS) {
   if (!s.type) s.type = 'wsr88d';
 }
 
-// Effective Level II reflectivity reach (km) per station type. WSR-88D
-// publishes reflectivity out to ~460 km, but the useful "Z" range is ~230 km
-// before the beam climbs above weather echoes. TDWR is a short-range terminal
-// radar — the C-band reflectivity volume only extends to ~90 km. Treating
-// both the same was letting TDWRs pad the mosaic's "nearby stations" list at
-// click points they can't actually see, which both showed bogus entries in
-// the UI and crowded out WSR-88Ds that did cover the point.
-export const STATION_RANGE_KM = {
+// Per-type ranges (km). Two distinct concepts:
+//
+//   STATION_REACH_KM — maximum distance from the radar at which it publishes
+//   any reflectivity data. Used to filter the mosaic's "nearby stations" list:
+//   if the click point is farther than this, the station literally has no data
+//   there and shouldn't take a slot in the maxStations budget. WSR-88D extends
+//   to ~460 km in long-range mode; TDWR only to ~90 km.
+//
+//   STATION_GATE_KM — quality cutoff for individual gates during voxel ingest.
+//   WSR-88D's reach goes well beyond where its data is trustworthy; the legacy
+//   "Z" useful range is ~230 km, so we drop gates past that to avoid letting
+//   far-edge AP/clutter leak into the mosaic. TDWR's physical reach already
+//   matches its useful reach.
+export const STATION_REACH_KM = {
+  wsr88d: 460,
+  tdwr: 90,
+};
+
+export const STATION_GATE_KM = {
   wsr88d: 230,
   tdwr: 90,
 };
 
-export function stationRangeKm(s) {
-  return STATION_RANGE_KM[s?.type] ?? STATION_RANGE_KM.wsr88d;
+export function stationReachKm(s) {
+  return STATION_REACH_KM[s?.type] ?? STATION_REACH_KM.wsr88d;
+}
+
+export function stationGateKm(s) {
+  return STATION_GATE_KM[s?.type] ?? STATION_GATE_KM.wsr88d;
 }
