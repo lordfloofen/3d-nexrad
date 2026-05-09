@@ -90,7 +90,7 @@ export const STATIONS = [
   { id: 'KIND', name: 'Indianapolis, IN', lat:    39.7075, lon:   -86.28028, elev: 241 },
   { id: 'KINX', name: 'Tulsa, OK', lat:     36.175, lon:   -95.56444, elev: 204 },
   { id: 'KIWA', name: 'Phoenix, AZ', lat:   33.28917, lon:  -111.66917, elev: 412 },
-  { id: 'KIWX', name: 'Northern Indiana, IN', lat:   41.40861, lon:       -85.7, elev: 293 },
+  { id: 'KIWX', name: 'Northern Indiana, IN', lat:    41.3589, lon:       -85.7, elev: 293 },
   { id: 'KJAX', name: 'Jacksonville, FL', lat:   30.48444, lon:   -81.70194, elev: 10 },
   { id: 'KJGX', name: 'Robins AFB, GA', lat:     32.675, lon:   -83.35111, elev: 159 },
   { id: 'KJKL', name: 'Jackson, KY', lat:   37.59083, lon:   -83.31306, elev: 416 },
