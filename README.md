@@ -81,9 +81,21 @@ GitHub Pages on every push to `main`. To enable:
   RdBu): cool/blue = inbound (toward the radar), warm/red = outbound (away).
   This avoids the classic green/red Doppler scheme, which is the hardest case
   for red-green color-vision deficiency.
-- Velocity is a single-radar product. The multi-radar mosaic composites
-  reflectivity only, since radial velocity is measured relative to each radar
-  and isn't directly comparable between sites.
+- Raw radial velocity is a single-radar product. The multi-radar mosaic
+  instead offers a **dual-Doppler rotation** product: it combines the radial
+  velocities from overlapping radars to retrieve the horizontal wind `(u, v)`
+  and renders the resulting vertical vorticity `ζ = ∂v/∂x − ∂u/∂y` so rotation
+  (e.g. mesocyclones) shows up objectively rather than as eyeballed couplets.
+  Vorticity uses a separate colorblind-safe diverging scale (ColorBrewer PuOr):
+  purple = anticyclonic, orange = cyclonic. Detected rotation cores are marked
+  with vertical columns.
+- The synthesis solves a per-cell least-squares system and gates it on
+  beam-crossing geometry (the classic 30°–150° dual-Doppler lobe criterion).
+  Vertical velocity is neglected (low tilts only), and **raw Level II velocity
+  is not yet dealiased** — folded gates can distort real-data retrievals, so a
+  QC warning is shown. The bundled *synthetic rotation demo* (several virtual
+  radars sampling a shared wind field with a known vortex) is alias-free and
+  validates the method end to end.
 
 ## License
 

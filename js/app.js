@@ -1,8 +1,10 @@
 import { RadarScene } from './renderer.js';
 import { buildSyntheticVolume } from './synthetic.js';
 import { parseLevel2 } from './nexrad.js';
-import { dbzToColor, legendStops, velToColor, velLegendStops } from './colormap.js';
+import { dbzToColor, legendStops, velToColor, velLegendStops, vortToColor, vortLegendStops } from './colormap.js';
 import { buildMosaic, findNearbyStations, findClosestKey, findLatestKey, fetchLevel2, revoxelizeMosaic } from './mosaic.js';
+import { buildRotationField } from './dualdoppler.js';
+import { buildSyntheticMosaic } from './synthetic-mosaic.js';
 import { STATIONS } from './stations.js';
 
 const $ = (id) => document.getElementById(id);
@@ -29,12 +31,21 @@ function legendRow(c, text) {
 function refreshLegend() {
   const el = $('legend');
   el.innerHTML = '';
-  if (scene.effectiveProduct() === 'VEL') {
+  const product = scene.effectiveProduct();
+  if (product === 'VEL') {
     $('legend-title').textContent = 'Velocity (m/s)';
     const vmax = scene.lastVelMax || 40;
     for (const stop of velLegendStops(vmax)) {
       const sign = stop.v > 0 ? '+' : '';
       el.appendChild(legendRow(velToColor(stop.v, vmax), `${sign}${stop.v} m/s`));
+    }
+  } else if (product === 'ROT') {
+    $('legend-title').textContent = 'Rotation (vorticity)';
+    const vmax = scene.lastVortMax || 0.02;
+    for (const stop of vortLegendStops(vmax)) {
+      const sign = stop.milli > 0 ? '+' : '';
+      const tag = stop.milli > 0 ? ' cyclonic' : stop.milli < 0 ? ' anticyclonic' : '';
+      el.appendChild(legendRow(vortToColor(stop.v, vmax), `${sign}${stop.milli}×10⁻³ s⁻¹${tag}`));
     }
   } else {
     $('legend-title').textContent = 'Reflectivity (dBZ)';
@@ -86,16 +97,24 @@ function updateVolumeStats(volume, info) {
 }
 
 function updateMosaicStats(mosaic, info) {
-  $('stat-mode').textContent = 'Mosaic';
+  $('stat-mode').textContent = info.isRotation ? 'Dual-Doppler' : 'Mosaic';
   $('stat-station').textContent = mosaic.stations.map(s => s.station.id).join(' ');
   $('stat-tilts').textContent = `${mosaic.stations.length} files`;
-  $('stat-gates').textContent = mosaic.points.length.toLocaleString() + ' voxels';
-  $('stat-max-label').textContent = 'Max dBZ';
-  $('stat-max').textContent = info.maxDbz != null ? `${info.maxDbz.toFixed(1)} dBZ` : '—';
+  if (info.isRotation) {
+    const cells = mosaic.rotation ? mosaic.rotation.points.length : 0;
+    $('stat-gates').textContent = cells.toLocaleString() + ' cells';
+    $('stat-max-label').textContent = 'Peak |ζ| / cores';
+    const peakMilli = info.peak != null ? (info.peak * 1000).toFixed(1) : '—';
+    $('stat-max').textContent = `${peakMilli}×10⁻³ s⁻¹ · ${info.coreCount || 0}`;
+  } else {
+    $('stat-gates').textContent = mosaic.points.length.toLocaleString() + ' voxels';
+    $('stat-max-label').textContent = 'Max dBZ';
+    $('stat-max').textContent = info.maxDbz != null ? `${info.maxDbz.toFixed(1)} dBZ` : '—';
+  }
   $('stat-points').textContent = info.pointCount.toLocaleString();
   const t = mosaic.targetTime.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
   $('volume-label').textContent =
-    `Mosaic • ${mosaic.center.lat.toFixed(2)}°,${mosaic.center.lon.toFixed(2)}° • ${t} • ${mosaic.stations.length} radars`;
+    `${info.isRotation ? 'Rotation' : 'Mosaic'} • ${mosaic.center.lat.toFixed(2)}°,${mosaic.center.lon.toFixed(2)}° • ${t} • ${mosaic.stations.length} radars`;
 }
 
 function applyVolume(volume) {
@@ -110,14 +129,17 @@ applyVolume(buildSyntheticVolume({ seed: Math.floor(Math.random() * 1000) }));
 queueMicrotask(() => ensureSingleMap());
 
 // ---------- Product selector ----------
-// The single "threshold" slider is reused per product: a dBZ floor for
-// reflectivity, or a minimum |velocity| for VEL. Each product remembers its
-// own slider value so switching back and forth doesn't lose the setting.
+// The Product dropdown is mode-aware: single-radar volumes offer REF/VEL, while
+// mosaics offer REF (reflectivity composite) or ROT (dual-Doppler rotation).
+// The single "threshold" slider is reused per product (a dBZ floor for REF, a
+// min |velocity| for VEL, a min rotation for ROT) and each remembers its value.
 const PRODUCT_UI = {
   REF: { label: 'dBZ threshold', optKey: 'threshold', min: -30, max: 75, step: 1 },
   VEL: { label: 'Min |velocity|', optKey: 'velMin', min: 0, max: 40, step: 1 },
+  ROT: { label: 'Min rotation ×10⁻³ s⁻¹', optKey: 'vortMinShow', min: 0, max: 20, step: 1 },
 };
-const productThreshValue = { REF: 15, VEL: 0 };
+const productThreshValue = { REF: 15, VEL: 0, ROT: 0 };
+let activeMode = 'single';
 
 function applyProductUI(product) {
   const cfg = PRODUCT_UI[product];
@@ -130,8 +152,57 @@ function applyProductUI(product) {
   $('threshold-value').textContent = String(productThreshValue[product]);
 }
 
+// Repopulate the dropdown's <option>s for the active mode and sync the slider.
+function setProductOptions(mode) {
+  const sel = $('product');
+  const opts = mode === 'mosaic'
+    ? [['REF', 'Reflectivity (REF)'], ['ROT', 'Rotation — dual-Doppler']]
+    : [['REF', 'Reflectivity (REF)'], ['VEL', 'Velocity (VEL)']];
+  sel.innerHTML = '';
+  for (const [value, label] of opts) {
+    const o = document.createElement('option');
+    o.value = value; o.textContent = label;
+    sel.appendChild(o);
+  }
+  const want = mode === 'mosaic' ? scene.mosaicProduct : scene.product;
+  sel.value = opts.some(o => o[0] === want) ? want : 'REF';
+  applyProductUI(sel.value);
+}
+
+// Switch the mosaic product, synthesizing the rotation field on first use.
+async function selectMosaicProduct(product) {
+  applyProductUI(product);
+  scene.mosaicProduct = product;
+  const m = scene.lastMosaic;
+  if (!m || scene.mode !== 'mosaic') { refreshLegend(); return; }
+  if (product === 'ROT' && !m.rotation) {
+    showLoader('Synthesizing winds (dual-Doppler)…');
+    await new Promise(r => setTimeout(r, 0)); // let the loader paint before the sync solve
+    try {
+      buildRotationField(m, {});
+    } catch (err) {
+      console.error(err);
+      toast(`Rotation synthesis failed: ${err.message}`, 'warn');
+    } finally {
+      hideLoader();
+    }
+  }
+  const info = scene.setMosaicProduct(product);
+  if (info) updateMosaicStats(m, info);
+  refreshLegend();
+  if (product === 'ROT' && m.rotation) {
+    const qc = m.rotation.qc;
+    if (qc.radarsWithVelocity < 2) {
+      toast('Dual-Doppler needs ≥2 radars with velocity in overlapping coverage.', 'warn');
+    } else if (qc.aliasing) {
+      toast(qc.aliasing, 'warn');
+    }
+  }
+}
+
 $('product').addEventListener('change', (e) => {
   const product = e.target.value;
+  if (activeMode === 'mosaic') { selectMosaicProduct(product); return; }
   applyProductUI(product);
   const info = scene.setProduct(product);
   if (info && scene.mode === 'volume') updateVolumeStats(scene.lastVolume, info);
@@ -176,8 +247,11 @@ $('stride').addEventListener('input', (e) => {
       const m = scene.lastMosaic;
       if (!m) return;
       revoxelizeMosaic(m, { stride: v });
+      m.rotation = null; // stride changes the velocity sampling too — re-synthesize lazily
+      if (scene.mosaicProduct === 'ROT') buildRotationField(m, { stride: v });
       const info = scene.setMosaic(m);
       updateMosaicStats(m, info);
+      refreshLegend();
     }, 120);
     return;
   }
@@ -202,16 +276,18 @@ tabs.forEach(tab => {
     panes.forEach(p => p.classList.toggle('hidden', p.dataset.mode !== mode));
     if (mode === 'mosaic') {
       ensureMap();
-      // Mosaics are reflectivity composites — radial velocity isn't comparable
-      // across radars, so pin the product to REF while in this mode.
-      $('product').value = 'REF';
-      $('product').disabled = true;
-      applyProductUI('REF');
-      scene.setProduct('REF');
+      activeMode = 'mosaic';
+      // Per-radar radial velocity isn't comparable across sites, so the mosaic
+      // velocity product is dual-Doppler rotation, not raw VEL.
+      $('product').disabled = false;
+      setProductOptions('mosaic');
       refreshLegend();
     } else if (mode === 'single') {
       ensureSingleMap();
+      activeMode = 'single';
       $('product').disabled = false;
+      setProductOptions('single');
+      refreshLegend();
     }
   });
 });
@@ -583,8 +659,14 @@ async function runMosaicBuild() {
     for (const s of mosaic.stations) setStationStatus(s.station.id, 'ok', 'ok');
     for (const s of (mosaic.skipped || [])) setStationStatus(s.station.id, 'skipped', 'err');
 
+    // If the rotation product is selected, synthesize before the first render.
+    if (scene.mosaicProduct === 'ROT') {
+      showLoader('Synthesizing winds (dual-Doppler)…');
+      try { buildRotationField(mosaic, {}); } catch (err) { console.error(err); }
+    }
     const info = scene.setMosaic(mosaic);
     updateMosaicStats(mosaic, info);
+    refreshLegend();
     toast(`Mosaic built from ${mosaic.stations.length} radars (${mosaic.points.length.toLocaleString()} voxels).`);
   } catch (err) {
     console.error(err);
@@ -597,4 +679,44 @@ async function runMosaicBuild() {
 }
 
 $('mosaic-build').addEventListener('click', runMosaicBuild);
+
+// Synthetic dual-Doppler showcase: a handful of virtual radars sampling a
+// shared wind field with a known mesocyclone. Alias-free, so it validates the
+// synthesis path end to end without any network or aliasing concerns.
+$('rotation-demo').addEventListener('click', () => {
+  showLoader('Building synthetic dual-Doppler scene…');
+  setTimeout(() => {
+    try {
+      const mosaic = buildSyntheticMosaic({});
+      revoxelizeMosaic(mosaic, { stride: mosaic.stride, minDbz: mosaic.minDbz });
+      buildRotationField(mosaic, {});
+
+      const list = $('mosaic-status');
+      list.innerHTML = '';
+      for (const s of mosaic.stations) {
+        const li = document.createElement('li');
+        li.dataset.id = s.station.id;
+        li.innerHTML =
+          `<span class="ss-id">${s.station.id}</span>` +
+          `<span class="ss-name">synthetic</span>` +
+          `<span class="ss-status ok">ok</span>`;
+        list.appendChild(li);
+      }
+
+      activeMode = 'mosaic';
+      scene.mosaicProduct = 'ROT';
+      setProductOptions('mosaic');
+      const info = scene.setMosaic(mosaic);
+      updateMosaicStats(mosaic, info);
+      refreshLegend();
+      const cores = mosaic.rotation.cores.length;
+      toast(`Synthetic dual-Doppler: ${mosaic.stations.length} radars, ${cores} rotation core${cores !== 1 ? 's' : ''} detected.`);
+    } catch (err) {
+      console.error(err);
+      toast(`Demo failed: ${err.message}`, 'warn');
+    } finally {
+      hideLoader();
+    }
+  }, 0);
+});
 
