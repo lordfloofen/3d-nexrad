@@ -89,3 +89,49 @@ export function velToColor(v, vmax = 40) {
 export function velLegendStops(vmax = 40) {
   return [1, 0.66, 0.33, 0, -0.33, -0.66, -1].map(f => ({ v: Math.round(f * vmax) }));
 }
+
+// --- Vorticity (rotation, s⁻¹) -------------------------------------------
+
+// ColorBrewer PuOr ordered purple -> white -> orange so anticyclonic (negative
+// vorticity) is purple and cyclonic (positive) is orange. Colorblind-safe, and
+// deliberately a different hue family than the velocity RdBu scale so the two
+// products read distinctly. (purple/orange, not red/green or red/blue.)
+const VORT_STOPS = [
+  [0.176, 0.000, 0.294], // #2d004b  strong anticyclonic
+  [0.329, 0.153, 0.533], // #542788
+  [0.502, 0.451, 0.675], // #8073ac
+  [0.698, 0.671, 0.824], // #b2abd2
+  [0.847, 0.855, 0.922], // #d8daeb
+  [0.969, 0.969, 0.969], // #f7f7f7  ~no rotation
+  [0.996, 0.878, 0.714], // #fee0b6
+  [0.992, 0.722, 0.388], // #fdb863
+  [0.878, 0.510, 0.078], // #e08214
+  [0.702, 0.345, 0.024], // #b35806
+  [0.498, 0.231, 0.031], // #7f3b08  strong cyclonic
+];
+
+// Map vertical vorticity (s⁻¹) to sRGB over the symmetric domain [-vmax, vmax].
+export function vortToColor(vort, vmax = 0.02) {
+  if (!Number.isFinite(vort)) return [0, 0, 0];
+  let t = (vort + vmax) / (2 * vmax);
+  t = Math.max(0, Math.min(1, t));
+  const n = VORT_STOPS.length - 1;
+  const f = t * n;
+  const i = Math.min(n - 1, Math.floor(f));
+  const frac = f - i;
+  const a = VORT_STOPS[i], b = VORT_STOPS[i + 1];
+  return [
+    a[0] + (b[0] - a[0]) * frac,
+    a[1] + (b[1] - a[1]) * frac,
+    a[2] + (b[2] - a[2]) * frac,
+  ];
+}
+
+// Legend ticks for vorticity, cyclonic (+) at top down to anticyclonic (-).
+// Labels are in 10⁻³ s⁻¹ since raw values are tiny.
+export function vortLegendStops(vmax = 0.02) {
+  return [1, 0.5, 0, -0.5, -1].map(f => ({
+    v: f * vmax,
+    milli: Math.round(f * vmax * 1000),
+  }));
+}

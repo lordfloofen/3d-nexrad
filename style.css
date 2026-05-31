@@ -307,6 +307,14 @@ input[type="datetime-local"] {
 }
 .select-row select:disabled { opacity: 0.45; cursor: not-allowed; }
 
+.hint-text {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  margin: 0 0 10px;
+}
+.hint-text b { color: var(--text); font-weight: 600; }
+
 .slider-row {
   display: block;
   margin-bottom: 12px;

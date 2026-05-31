@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { dbzToColor, velToColor } from './colormap.js';
+import { dbzToColor, velToColor, vortToColor } from './colormap.js';
 import { tiltMoment } from './nexrad.js';
 import { beamHeightKm, lonLatToEnuKm } from './geo.js';
 import { createOsmGround } from './osm-ground.js';
@@ -55,12 +55,15 @@ export class RadarScene {
     this.points = null;
     this.mode = null;          // 'volume' | 'mosaic'
     this.product = 'REF';      // 'REF' | 'VEL' (single-radar volumes only)
+    this.mosaicProduct = 'REF';// 'REF' | 'ROT' (multi-radar mosaics)
     this.lastVolume = null;
     this.lastMosaic = null;
     this.lastVelMax = null;    // velocity scale used by the last VEL render
+    this.lastVortMax = null;   // vorticity scale used by the last ROT render
     this.options = {
       threshold: 15,           // REF: minimum dBZ to draw
       velMin: 0,               // VEL: minimum |velocity| (m/s) to draw
+      vortMinShow: 0,          // ROT: minimum |vorticity| to draw, in 10⁻³ s⁻¹
       verticalExaggeration: 4,
       pointSize: 2.0,
       stride: 2,
@@ -83,13 +86,20 @@ export class RadarScene {
   }
   getBasemapAttribution() { return this._basemapAttribution; }
 
-  // The product actually displayed. Mosaics are reflectivity composites, so a
-  // VEL selection only takes effect on single-radar volumes.
-  effectiveProduct() { return this.mode === 'mosaic' ? 'REF' : this.product; }
+  // The product actually displayed: single-radar volumes use `product`
+  // (REF/VEL); mosaics use `mosaicProduct` (REF reflectivity composite, or ROT
+  // dual-Doppler rotation).
+  effectiveProduct() { return this.mode === 'mosaic' ? this.mosaicProduct : this.product; }
 
   setProduct(product) {
     this.product = product;
     if (this.mode === 'volume' && this.lastVolume) return this.setVolume(this.lastVolume);
+    return null;
+  }
+
+  setMosaicProduct(product) {
+    this.mosaicProduct = product;
+    if (this.mode === 'mosaic' && this.lastMosaic) return this.setMosaic(this.lastMosaic);
     return null;
   }
 
@@ -101,6 +111,9 @@ export class RadarScene {
     } else if (key === 'velMin') {
       // Velocity filtering only applies to single-radar volumes.
       if (this.mode === 'volume' && this.lastVolume) return this.setVolume(this.lastVolume);
+    } else if (key === 'vortMinShow') {
+      // Rotation display filter only applies to mosaics.
+      if (this.mode === 'mosaic' && this.lastMosaic) return this.setMosaic(this.lastMosaic);
     } else if (key === 'verticalExaggeration') {
       this.world.scale.y = value;
     } else if (key === 'pointSize') {
@@ -212,6 +225,25 @@ export class RadarScene {
       this._clearBasemap();
     }
 
+    const info = (this.mosaicProduct === 'ROT' && mosaic.rotation)
+      ? this._renderRotation(mosaic)
+      : this._renderReflectivityMosaic(mosaic);
+
+    // Center marker (the click point)
+    this.markers.add(this._makeCenterMarker());
+
+    // Station markers (offset from mosaic center in ENU km)
+    const center = mosaic.center;
+    for (const entry of (mosaic.stations || [])) {
+      const s = entry.station || entry;
+      const off = lonLatToEnuKm(s.lat, s.lon, s.elev || 0, center.lat, center.lon, center.elev || 0);
+      this.markers.add(this._makeStationMarker(s, off));
+    }
+
+    return info;
+  }
+
+  _renderReflectivityMosaic(mosaic) {
     const { threshold } = this.options;
     const positions = [];
     const colors = [];
@@ -227,18 +259,6 @@ export class RadarScene {
     }
 
     this._installPoints(positions, colors);
-
-    // Center marker (the click point)
-    this.markers.add(this._makeCenterMarker());
-
-    // Station markers (offset from mosaic center in ENU km)
-    const center = mosaic.center;
-    for (const entry of (mosaic.stations || [])) {
-      const s = entry.station || entry;
-      const off = lonLatToEnuKm(s.lat, s.lon, s.elev || 0, center.lat, center.lon, center.elev || 0);
-      this.markers.add(this._makeStationMarker(s, off));
-    }
-
     return {
       pointCount: positions.length / 3,
       product: 'REF',
@@ -246,6 +266,50 @@ export class RadarScene {
       units: 'dBZ',
       peak: Number.isFinite(maxDbz) ? maxDbz : null,
       maxDbz: Number.isFinite(maxDbz) ? maxDbz : null,
+    };
+  }
+
+  // Render the dual-Doppler rotation field: each cell colored by vertical
+  // vorticity, with markers on detected rotation cores.
+  _renderRotation(mosaic) {
+    const pts = mosaic.rotation.points || [];
+    const cores = mosaic.rotation.cores || [];
+    const minShow = (this.options.vortMinShow || 0) / 1000; // 10⁻³ s⁻¹ -> s⁻¹
+
+    // Symmetric, data-fit color domain, clamped to a sane mesocyclone range.
+    let vmax = 0;
+    for (const p of pts) {
+      if (Number.isFinite(p.vort)) { const a = Math.abs(p.vort); if (a > vmax) vmax = a; }
+    }
+    vmax = Math.min(0.04, Math.max(0.008, Math.ceil(vmax * 1000) / 1000));
+    this.lastVortMax = vmax;
+
+    const positions = [];
+    const colors = [];
+    let peak = 0;
+    for (const p of pts) {
+      if (!Number.isFinite(p.vort)) continue;
+      if (Math.abs(p.vort) < minShow) continue;
+      positions.push(p.x, p.z, -p.y);
+      const c = vortToColor(p.vort, vmax);
+      colors.push(c[0], c[1], c[2]);
+      const a = Math.abs(p.vort);
+      if (a > peak) peak = a;
+    }
+    this._installPoints(positions, colors);
+
+    for (const core of cores) this.markers.add(this._makeRotationCore(core, vmax));
+
+    return {
+      pointCount: positions.length / 3,
+      product: 'ROT',
+      isVel: false,
+      isRotation: true,
+      units: 's⁻¹',
+      peak: peak || null,
+      maxDbz: null,
+      vortMax: vmax,
+      coreCount: cores.length,
     };
   }
 
@@ -396,6 +460,31 @@ export class RadarScene {
     );
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.05;
+    g.add(ring);
+    return g;
+  }
+
+  // Marker on a detected rotation core: a translucent vertical column at the
+  // cell, tinted by the colormap so cyclonic/anticyclonic reads at a glance.
+  _makeRotationCore(core, vmax) {
+    const g = new THREE.Group();
+    g.position.set(core.x, core.z, -core.y); // ENU -> world
+    const c = vortToColor(core.vort, vmax);
+    const color = new THREE.Color(c[0], c[1], c[2]);
+    const column = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.2, 1.2, 10, 16, 1, true),
+      new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity: 0.45, side: THREE.DoubleSide,
+      })
+    );
+    column.position.y = 5;
+    g.add(column);
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(1.4, 2.4, 32),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, side: THREE.DoubleSide })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.06;
     g.add(ring);
     return g;
   }

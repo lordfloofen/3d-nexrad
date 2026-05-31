@@ -15,9 +15,11 @@ parsing, voxelization, and rendering happens in the browser.
 | `js/mosaic.js` | Multi-radar discovery, S3 fetch, voxel-grid stitching |
 | `js/nexrad.js` | NEXRAD/TDWR Archive II Level II parser |
 | `js/synthetic.js` | Procedural demo volume so the app shows something on load |
+| `js/synthetic-mosaic.js` | Multi-radar synthetic scene (shared wind field + vortex) for dual-Doppler |
+| `js/dualdoppler.js` | Multi-radar wind synthesis + rotation (vorticity) detection |
 | `js/stations.js` | Station coordinates and per-type range constants |
 | `js/geo.js` | Haversine distance, ENU projection, beam-height formula |
-| `js/colormap.js` | NWS reflectivity color scale |
+| `js/colormap.js` | Reflectivity, velocity, and vorticity color scales |
 | `js/osm-ground.js` | OSM/CARTO tile basemap drawn under the 3D scene |
 
 ## Data flow
@@ -74,18 +76,22 @@ sit at realistic heights instead of straight-line beam projections.
 
 ## `js/colormap.js`
 
-Standard NWS reflectivity color scale.
+Color scales for each product. The velocity and vorticity scales are
+deliberately colorblind-safe diverging ramps (ColorBrewer RdBu and PuOr) in
+different hue families so the products read distinctly.
 
-### `STOPS`
-A table of `{ dbz, [r,g,b] }` stops from -30 to 75 dBZ. Linear interpolation
-between adjacent stops.
+### `STOPS` / `dbzToColor(dbz)` / `legendStops()`
+Standard NWS reflectivity scale: a table of `{ dbz, [r,g,b] }` stops from -30
+to 75 dBZ with linear interpolation. `dbzToColor` clamps outside the range and
+returns black for non-finite input; `legendStops` returns the 5–70 dBZ subset.
 
-### `dbzToColor(dbz) → [r, g, b]`
-Returns sRGB in 0..1 for a dBZ value. Clamps below the lowest stop (deep
-indigo) and above the highest (white). Returns black for non-finite input.
+### `velToColor(v, vmax)` / `velLegendStops(vmax)`
+Radial velocity (m/s) on a RdBu diverging scale over `[-vmax, vmax]`: blue =
+inbound (toward radar), red = outbound. `vmax` is fit to the data per volume.
 
-### `legendStops()`
-Returns the 5–70 dBZ subset of `STOPS` for the on-screen legend.
+### `vortToColor(vort, vmax)` / `vortLegendStops(vmax)`
+Vertical vorticity (s⁻¹) on a PuOr diverging scale: purple = anticyclonic,
+orange = cyclonic. Legend ticks are labeled in 10⁻³ s⁻¹.
 
 ---
 
@@ -568,3 +574,68 @@ or `ensureMap`) — neither map exists until its tab is first shown.
   scene isn't empty.
 - The single-radar tab is active by default; its map is initialized in a
   `queueMicrotask` to avoid measuring zero-size containers.
+
+---
+
+## `js/dualdoppler.js`
+
+Multi-radar (dual-Doppler) wind synthesis and rotation detection. A single
+radar measures only the radial wind component `Vr = u·a + v·b + w·c` (where
+`(a,b,c)` is the radar→gate unit vector); two or more radars viewing a cell
+from different angles give independent projections, so the horizontal wind
+`(u, v)` can be recovered. Vertical velocity `w` is neglected (valid at low
+tilts where `c ≈ 0`).
+
+### `class DualDopplerGrid`
+A sparse Cartesian grid (`"ix|iy|iz"` keys). Each cell accumulates the
+least-squares **normal-equation sums** (`Saa, Sab, Sbb, Sav, Sbv`), a sample
+count, and a station bitmask — rather than storing every sample.
+
+### `ingestVelocity(grid, volume, station, center, bit, opts)`
+Projects one volume's VEL gates into the grid: computes each gate's ENU
+position and the horizontal beam unit vector `(a, b)`, then accumulates the
+normal equations weighted by `cos²(elevation)` (down-weighting high tilts).
+Only tilts ≤ `maxElevDeg` (default 7°) are used.
+
+### `solveGrid(grid, opts)`
+Per cell with ≥2 contributing radars, solves the 2×2 system for `(u, v)`.
+`det = Saa·Sbb − Sab²` gates geometry: the normalized quality
+`q = 2·√det/(Saa+Sbb)` equals `|sin β|` for two beams crossing at angle β, so
+`q ≥ qMin` (default 0.5) reproduces the classic 30°–150° dual-Doppler lobe
+criterion. A second pass computes vorticity `ζ = ∂v/∂x − ∂u/∂y` by central
+differences against same-height neighbours.
+
+### `detectCores(points, opts)` / `nmsCores(...)`
+Cells whose `|ζ|` exceeds `vortMin` (default 0.005 s⁻¹), reduced to one core
+per rotation by Euclidean non-maximum suppression.
+
+### `buildRotationField(mosaic, opts) → { points, cores, qc }`
+Orchestrates the above over a mosaic's already-cached per-station volumes (no
+refetch — the same volumes the reflectivity composite uses). Stashes the result
+on `mosaic.rotation`. `qc` reports radars contributing velocity, scan-time
+spread, and — for non-synthetic data — an aliasing caveat (raw Level II
+velocity is not dealiased, so folded gates can distort the retrieval).
+
+---
+
+## `js/synthetic-mosaic.js`
+
+Builds a synthetic multi-radar scene for validating and demoing dual-Doppler.
+Several virtual radars all sample the **same** analytic wind field (a uniform
+base flow plus a cyclonic Rankine vortex), so a correct synthesis must recover
+that field and the vorticity must peak at the prescribed vortex. Being
+analytic, the scene is free of velocity aliasing. `buildSyntheticMosaic(opts)`
+returns a mosaic object compatible with `revoxelizeMosaic` (REF) and
+`buildRotationField` (VEL).
+
+## Rotation in the renderer / UI
+
+- `renderer.js` tracks `mosaicProduct` (`'REF'` | `'ROT'`). `_renderRotation`
+  colors each solved cell by vorticity (`vortToColor`, data-fit symmetric
+  domain) and drops a translucent column marker on each detected core. The
+  rotation display filter (`vortMinShow`, in 10⁻³ s⁻¹) hides weak cells.
+- `app.js` makes the Product dropdown mode-aware: single radar offers REF/VEL,
+  mosaic offers REF/ROT. Selecting ROT synthesizes the rotation field lazily
+  (under a loader) from the cached volumes, then surfaces QC toasts. A
+  **synthetic rotation demo** button builds the synthetic scene and renders it
+  immediately.
