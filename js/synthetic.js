@@ -83,6 +83,29 @@ function reflectivityAt(xKm, yKm, zKm, cells, rand) {
   return dbz;
 }
 
+// Synthetic horizontal wind vector (m/s, east/north) at a point: a
+// southwesterly flow that veers and strengthens with height, plus cyclonic
+// rotation near each storm cell so the velocity product shows recognizable
+// inbound/outbound couplets.
+function windAt(xKm, yKm, zKm, cells) {
+  const spd = 8 + zKm * 1.4;
+  const dirRad = (220 + zKm * 2.5) * Math.PI / 180; // meteorological "from"
+  let we = -spd * Math.sin(dirRad);  // negate: "from" direction -> motion vector
+  let wn = -spd * Math.cos(dirRad);
+  for (const c of cells) {
+    const cx = Math.sin(c.az * Math.PI / 180) * c.range;
+    const cy = Math.cos(c.az * Math.PI / 180) * c.range;
+    const dx = xKm - cx, dy = yKm - cy;
+    const r = Math.hypot(dx, dy);
+    if (r > 0.5 && r < c.rH * 2.5) {
+      const vt = c.intensity * 0.45 * Math.exp(-Math.pow(r / c.rH, 2)); // tangential
+      we += vt * (-dy / r); // counterclockwise (cyclonic in N hemisphere)
+      wn += vt * (dx / r);
+    }
+  }
+  return { we, wn };
+}
+
 export function buildSyntheticVolume({
   station = 'DEMO',
   lat = 35.3331,
@@ -99,8 +122,10 @@ export function buildSyntheticVolume({
 
   const tilts = TILT_ELEVATIONS.map((elevationDeg) => {
     const elevRad = elevationDeg * Math.PI / 180;
+    const cosE = Math.cos(elevRad);
     const azArr = new Float32Array(azimuths);
     const refl = new Float32Array(azimuths * gates);
+    const vel = new Float32Array(azimuths * gates);
     for (let a = 0; a < azimuths; a++) {
       azArr[a] = a; // 1° spacing
       const azRad = a * Math.PI / 180;
@@ -120,6 +145,14 @@ export function buildSyntheticVolume({
         dbz -= Math.max(0, (slant - 60)) * 0.05;
         if (dbz < -30) dbz = NaN;
         refl[a * gates + g] = dbz;
+        // Radial velocity only where there's an echo: project the wind onto
+        // the (mostly horizontal) beam direction. + = outbound, - = inbound.
+        if (Number.isFinite(dbz)) {
+          const { we, wn } = windAt(x, y, z, cells);
+          vel[a * gates + g] = (we * sinA + wn * cosA) * cosE;
+        } else {
+          vel[a * gates + g] = NaN;
+        }
       }
     }
     return {
@@ -130,6 +163,10 @@ export function buildSyntheticVolume({
       gates,
       reflectivity: refl,
       missingValue: NaN,
+      moments: {
+        REF: { gates, gateSpacingM, firstGateM, data: refl },
+        VEL: { gates, gateSpacingM, firstGateM, data: vel },
+      },
     };
   });
 

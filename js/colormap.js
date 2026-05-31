@@ -1,5 +1,11 @@
-// Standard NWS reflectivity color scale (dBZ).
-// Returns sRGB [r,g,b] in 0..1 for a given dBZ value.
+// Color scales for the Level II products we render.
+//
+// REF (reflectivity): the standard NWS dBZ scale.
+// VEL (radial velocity): a colorblind-friendly diverging scale. The classic
+//   green/red Doppler scheme is the worst case for the most common (red-green)
+//   color-vision deficiencies, so we use ColorBrewer's RdBu diverging ramp
+//   instead — it is flagged colorblind-safe and keeps the intuitive
+//   cool = inbound / warm = outbound reading.
 
 const STOPS = [
   { dbz: -30, c: [0.20, 0.20, 0.30] },
@@ -40,4 +46,46 @@ export function dbzToColor(dbz) {
 
 export function legendStops() {
   return STOPS.filter(s => s.dbz >= 5 && s.dbz <= 70);
+}
+
+// --- Velocity (m/s) -------------------------------------------------------
+
+// ColorBrewer RdBu (11-class), ordered blue -> white -> red so that the most
+// negative (inbound, toward the radar) velocities are deep blue and the most
+// positive (outbound, away) are deep red. Colorblind-safe per ColorBrewer.
+const VEL_STOPS = [
+  [0.020, 0.188, 0.380], // #053061  most inbound
+  [0.129, 0.400, 0.675], // #2166ac
+  [0.263, 0.576, 0.765], // #4393c3
+  [0.573, 0.773, 0.871], // #92c5de
+  [0.820, 0.898, 0.941], // #d1e5f0
+  [0.969, 0.969, 0.969], // #f7f7f7  ~zero
+  [0.992, 0.859, 0.780], // #fddbc7
+  [0.957, 0.647, 0.510], // #f4a582
+  [0.839, 0.376, 0.302], // #d6604d
+  [0.698, 0.094, 0.169], // #b2182b
+  [0.404, 0.000, 0.122], // #67001f  most outbound
+];
+
+// Map a radial velocity (m/s) to an sRGB [r,g,b]. `vmax` sets the symmetric
+// domain [-vmax, +vmax]; values beyond it saturate at the ramp ends.
+export function velToColor(v, vmax = 40) {
+  if (!Number.isFinite(v)) return [0, 0, 0];
+  let t = (v + vmax) / (2 * vmax);
+  t = Math.max(0, Math.min(1, t));
+  const n = VEL_STOPS.length - 1;
+  const f = t * n;
+  const i = Math.min(n - 1, Math.floor(f));
+  const frac = f - i;
+  const a = VEL_STOPS[i], b = VEL_STOPS[i + 1];
+  return [
+    a[0] + (b[0] - a[0]) * frac,
+    a[1] + (b[1] - a[1]) * frac,
+    a[2] + (b[2] - a[2]) * frac,
+  ];
+}
+
+// Legend ticks for the velocity scale, from outbound (+) down to inbound (-).
+export function velLegendStops(vmax = 40) {
+  return [1, 0.66, 0.33, 0, -0.33, -0.66, -1].map(f => ({ v: Math.round(f * vmax) }));
 }

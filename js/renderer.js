@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { dbzToColor } from './colormap.js';
+import { dbzToColor, velToColor } from './colormap.js';
+import { tiltMoment } from './nexrad.js';
 import { beamHeightKm, lonLatToEnuKm } from './geo.js';
 import { createOsmGround } from './osm-ground.js';
 
@@ -53,10 +54,13 @@ export class RadarScene {
 
     this.points = null;
     this.mode = null;          // 'volume' | 'mosaic'
+    this.product = 'REF';      // 'REF' | 'VEL' (single-radar volumes only)
     this.lastVolume = null;
     this.lastMosaic = null;
+    this.lastVelMax = null;    // velocity scale used by the last VEL render
     this.options = {
-      threshold: 15,
+      threshold: 15,           // REF: minimum dBZ to draw
+      velMin: 0,               // VEL: minimum |velocity| (m/s) to draw
       verticalExaggeration: 4,
       pointSize: 2.0,
       stride: 2,
@@ -79,11 +83,24 @@ export class RadarScene {
   }
   getBasemapAttribution() { return this._basemapAttribution; }
 
+  // The product actually displayed. Mosaics are reflectivity composites, so a
+  // VEL selection only takes effect on single-radar volumes.
+  effectiveProduct() { return this.mode === 'mosaic' ? 'REF' : this.product; }
+
+  setProduct(product) {
+    this.product = product;
+    if (this.mode === 'volume' && this.lastVolume) return this.setVolume(this.lastVolume);
+    return null;
+  }
+
   setOption(key, value) {
     this.options[key] = value;
     if (key === 'threshold' || key === 'stride') {
       if (this.mode === 'volume' && this.lastVolume) return this.setVolume(this.lastVolume);
       if (this.mode === 'mosaic' && this.lastMosaic) return this.setMosaic(this.lastMosaic);
+    } else if (key === 'velMin') {
+      // Velocity filtering only applies to single-radar volumes.
+      if (this.mode === 'volume' && this.lastVolume) return this.setVolume(this.lastVolume);
     } else if (key === 'verticalExaggeration') {
       this.world.scale.y = value;
     } else if (key === 'pointSize') {
@@ -107,15 +124,39 @@ export class RadarScene {
       this._clearBasemap();
     }
 
-    const { threshold, stride } = this.options;
+    const isVel = this.product === 'VEL';
+    const moment = isVel ? 'VEL' : 'REF';
+    const { threshold, velMin, stride } = this.options;
+
+    // Velocity uses a symmetric, data-fit color domain so the diverging scale
+    // spans the actual inbound/outbound extremes. Reflectivity uses its fixed
+    // dBZ scale, so no pre-pass is needed.
+    let vmax = 0;
+    if (isVel) {
+      for (const tilt of volume.tilts) {
+        const m = tiltMoment(tilt, 'VEL');
+        if (!m) continue;
+        const d = m.data;
+        for (let i = 0; i < d.length; i++) {
+          const v = d[i];
+          if (Number.isFinite(v)) { const a = Math.abs(v); if (a > vmax) vmax = a; }
+        }
+      }
+      vmax = Math.min(60, Math.max(20, Math.ceil(vmax / 5) * 5));
+    }
+    this.lastVelMax = isVel ? vmax : null;
+
     const positions = [];
     const colors = [];
-    let maxDbz = -Infinity;
+    let peak = -Infinity;
 
     for (const tilt of volume.tilts) {
+      const m = tiltMoment(tilt, moment);
+      if (!m) continue; // e.g. a velocity-only or reflectivity-only split cut
       const elevRad = tilt.elevationDeg * Math.PI / 180;
       const cosE = Math.cos(elevRad);
-      const { gates, gateSpacingM, firstGateM, azimuthsDeg, reflectivity } = tilt;
+      const { gates, gateSpacingM, firstGateM, data } = m;
+      const { azimuthsDeg } = tilt;
       const azCount = azimuthsDeg.length;
       for (let a = 0; a < azCount; a++) {
         const az = azimuthsDeg[a];
@@ -125,22 +166,33 @@ export class RadarScene {
         const cosA = Math.cos(azRad);
         const rowOff = a * gates;
         for (let g = 0; g < gates; g += stride) {
-          const dbz = reflectivity[rowOff + g];
-          if (!Number.isFinite(dbz) || dbz < threshold) continue;
+          const val = data[rowOff + g];
+          if (!Number.isFinite(val)) continue;
+          if (isVel) { if (Math.abs(val) < velMin) continue; }
+          else if (val < threshold) continue;
           const slantKm = (firstGateM + g * gateSpacingM) / 1000;
           if (slantKm > 230) continue;
           const groundKm = slantKm * cosE;
           const heightKm = beamHeightKm(slantKm, elevRad);
           positions.push(sinA * groundKm, heightKm, -cosA * groundKm);
-          const c = dbzToColor(dbz);
+          const c = isVel ? velToColor(val, vmax) : dbzToColor(val);
           colors.push(c[0], c[1], c[2]);
-          if (dbz > maxDbz) maxDbz = dbz;
+          const mag = isVel ? Math.abs(val) : val;
+          if (mag > peak) peak = mag;
         }
       }
     }
 
     this._installPoints(positions, colors);
-    return { pointCount: positions.length / 3, maxDbz: Number.isFinite(maxDbz) ? maxDbz : null };
+    return {
+      pointCount: positions.length / 3,
+      product: this.product,
+      isVel,
+      units: isVel ? 'm/s' : 'dBZ',
+      peak: Number.isFinite(peak) ? peak : null,
+      maxDbz: isVel ? null : (Number.isFinite(peak) ? peak : null),
+      velMax: isVel ? vmax : null,
+    };
   }
 
   // --- Multi-radar mosaic rendering --------------------------------------
@@ -189,6 +241,10 @@ export class RadarScene {
 
     return {
       pointCount: positions.length / 3,
+      product: 'REF',
+      isVel: false,
+      units: 'dBZ',
+      peak: Number.isFinite(maxDbz) ? maxDbz : null,
       maxDbz: Number.isFinite(maxDbz) ? maxDbz : null,
     };
   }

@@ -1,7 +1,7 @@
 import { RadarScene } from './renderer.js';
 import { buildSyntheticVolume } from './synthetic.js';
 import { parseLevel2 } from './nexrad.js';
-import { dbzToColor, legendStops } from './colormap.js';
+import { dbzToColor, legendStops, velToColor, velLegendStops } from './colormap.js';
 import { buildMosaic, findNearbyStations, findClosestKey, findLatestKey, fetchLevel2, revoxelizeMosaic } from './mosaic.js';
 import { STATIONS } from './stations.js';
 
@@ -11,24 +11,39 @@ const canvas = $('scene');
 const scene = new RadarScene(canvas);
 
 // ---------- Legend ----------
-function buildLegend() {
+function legendRow(c, text) {
+  const row = document.createElement('div');
+  row.className = 'legend-row';
+  const sw = document.createElement('span');
+  sw.className = 'legend-swatch';
+  sw.style.background = `rgb(${Math.round(c[0]*255)},${Math.round(c[1]*255)},${Math.round(c[2]*255)})`;
+  const lbl = document.createElement('span');
+  lbl.textContent = text;
+  row.appendChild(sw);
+  row.appendChild(lbl);
+  return row;
+}
+
+// The legend follows whatever the renderer is actually drawing: the dBZ scale
+// for reflectivity, or the velocity scale (fit to the current volume) for VEL.
+function refreshLegend() {
   const el = $('legend');
   el.innerHTML = '';
-  for (const stop of legendStops()) {
-    const c = dbzToColor(stop.dbz);
-    const row = document.createElement('div');
-    row.className = 'legend-row';
-    const sw = document.createElement('span');
-    sw.className = 'legend-swatch';
-    sw.style.background = `rgb(${Math.round(c[0]*255)},${Math.round(c[1]*255)},${Math.round(c[2]*255)})`;
-    const lbl = document.createElement('span');
-    lbl.textContent = `${stop.dbz} dBZ`;
-    row.appendChild(sw);
-    row.appendChild(lbl);
-    el.appendChild(row);
+  if (scene.effectiveProduct() === 'VEL') {
+    $('legend-title').textContent = 'Velocity (m/s)';
+    const vmax = scene.lastVelMax || 40;
+    for (const stop of velLegendStops(vmax)) {
+      const sign = stop.v > 0 ? '+' : '';
+      el.appendChild(legendRow(velToColor(stop.v, vmax), `${sign}${stop.v} m/s`));
+    }
+  } else {
+    $('legend-title').textContent = 'Reflectivity (dBZ)';
+    for (const stop of legendStops()) {
+      el.appendChild(legendRow(dbzToColor(stop.dbz), `${stop.dbz} dBZ`));
+    }
   }
 }
-buildLegend();
+refreshLegend();
 
 // ---------- Loader / toast ----------
 function showLoader(text) {
@@ -54,7 +69,13 @@ function updateVolumeStats(volume, info) {
   $('stat-tilts').textContent = String(volume.tilts.length);
   const totalGates = volume.tilts.reduce((s, t) => s + t.azimuthsDeg.length * t.gates, 0);
   $('stat-gates').textContent = totalGates.toLocaleString();
-  $('stat-max').textContent = info.maxDbz != null ? `${info.maxDbz.toFixed(1)} dBZ` : '—';
+  if (info.isVel) {
+    $('stat-max-label').textContent = 'Peak |vel|';
+    $('stat-max').textContent = info.peak != null ? `${info.peak.toFixed(0)} m/s` : '—';
+  } else {
+    $('stat-max-label').textContent = 'Max dBZ';
+    $('stat-max').textContent = info.maxDbz != null ? `${info.maxDbz.toFixed(1)} dBZ` : '—';
+  }
   $('stat-points').textContent = info.pointCount.toLocaleString();
   const ts = volume.timestamp ? volume.timestamp.toISOString().replace('T', ' ').slice(0, 19) + ' UTC' : '';
   if (volume.synthetic) {
@@ -69,6 +90,7 @@ function updateMosaicStats(mosaic, info) {
   $('stat-station').textContent = mosaic.stations.map(s => s.station.id).join(' ');
   $('stat-tilts').textContent = `${mosaic.stations.length} files`;
   $('stat-gates').textContent = mosaic.points.length.toLocaleString() + ' voxels';
+  $('stat-max-label').textContent = 'Max dBZ';
   $('stat-max').textContent = info.maxDbz != null ? `${info.maxDbz.toFixed(1)} dBZ` : '—';
   $('stat-points').textContent = info.pointCount.toLocaleString();
   const t = mosaic.targetTime.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
@@ -79,6 +101,7 @@ function updateMosaicStats(mosaic, info) {
 function applyVolume(volume) {
   const info = scene.setVolume(volume);
   updateVolumeStats(volume, info);
+  refreshLegend();
 }
 
 // ---------- Initial demo ----------
@@ -86,11 +109,42 @@ applyVolume(buildSyntheticVolume({ seed: Math.floor(Math.random() * 1000) }));
 // Single-radar tab is active by default; init its picker map up front.
 queueMicrotask(() => ensureSingleMap());
 
+// ---------- Product selector ----------
+// The single "threshold" slider is reused per product: a dBZ floor for
+// reflectivity, or a minimum |velocity| for VEL. Each product remembers its
+// own slider value so switching back and forth doesn't lose the setting.
+const PRODUCT_UI = {
+  REF: { label: 'dBZ threshold', optKey: 'threshold', min: -30, max: 75, step: 1 },
+  VEL: { label: 'Min |velocity|', optKey: 'velMin', min: 0, max: 40, step: 1 },
+};
+const productThreshValue = { REF: 15, VEL: 0 };
+
+function applyProductUI(product) {
+  const cfg = PRODUCT_UI[product];
+  const slider = $('threshold');
+  slider.min = cfg.min;
+  slider.max = cfg.max;
+  slider.step = cfg.step;
+  slider.value = productThreshValue[product];
+  $('threshold-label').textContent = cfg.label;
+  $('threshold-value').textContent = String(productThreshValue[product]);
+}
+
+$('product').addEventListener('change', (e) => {
+  const product = e.target.value;
+  applyProductUI(product);
+  const info = scene.setProduct(product);
+  if (info && scene.mode === 'volume') updateVolumeStats(scene.lastVolume, info);
+  refreshLegend();
+});
+
 // ---------- Display controls (shared) ----------
 $('threshold').addEventListener('input', (e) => {
   const v = parseFloat(e.target.value);
   $('threshold-value').textContent = String(v);
-  const info = scene.setOption('threshold', v);
+  const product = scene.effectiveProduct();
+  productThreshValue[product] = v;
+  const info = scene.setOption(PRODUCT_UI[product].optKey, v);
   if (info) {
     if (scene.mode === 'volume') updateVolumeStats(scene.lastVolume, info);
     else if (scene.mode === 'mosaic') updateMosaicStats(scene.lastMosaic, info);
@@ -146,8 +200,19 @@ tabs.forEach(tab => {
     tabs.forEach(t => t.classList.toggle('active', t === tab));
     const mode = tab.dataset.mode;
     panes.forEach(p => p.classList.toggle('hidden', p.dataset.mode !== mode));
-    if (mode === 'mosaic') ensureMap();
-    else if (mode === 'single') ensureSingleMap();
+    if (mode === 'mosaic') {
+      ensureMap();
+      // Mosaics are reflectivity composites — radial velocity isn't comparable
+      // across radars, so pin the product to REF while in this mode.
+      $('product').value = 'REF';
+      $('product').disabled = true;
+      applyProductUI('REF');
+      scene.setProduct('REF');
+      refreshLegend();
+    } else if (mode === 'single') {
+      ensureSingleMap();
+      $('product').disabled = false;
+    }
   });
 });
 

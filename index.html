@@ -102,8 +102,15 @@
       <!-- ============== SHARED DISPLAY CONTROLS ============== -->
       <section class="panel-section">
         <h2>Display</h2>
+        <label class="select-row">
+          <span>Product</span>
+          <select id="product">
+            <option value="REF">Reflectivity (REF)</option>
+            <option value="VEL">Velocity (VEL)</option>
+          </select>
+        </label>
         <label class="slider-row">
-          <span>dBZ threshold <em id="threshold-value">15</em></span>
+          <span><span id="threshold-label">dBZ threshold</span> <em id="threshold-value">15</em></span>
           <input type="range" id="threshold" min="-30" max="75" step="1" value="15" />
         </label>
         <label class="slider-row">
@@ -143,13 +150,13 @@
           <li><span>Station(s)</span><b id="stat-station">—</b></li>
           <li><span>Tilts / files</span><b id="stat-tilts">—</b></li>
           <li><span>Gates</span><b id="stat-gates">—</b></li>
-          <li><span>Max dBZ</span><b id="stat-max">—</b></li>
+          <li><span id="stat-max-label">Max dBZ</span><b id="stat-max">—</b></li>
           <li><span>Points</span><b id="stat-points">—</b></li>
         </ul>
       </section>
 
       <section class="panel-section legend-section">
-        <h2>Reflectivity (dBZ)</h2>
+        <h2 id="legend-title">Reflectivity (dBZ)</h2>
         <div id="legend"></div>
       </section>
 
