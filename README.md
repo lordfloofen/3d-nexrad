@@ -1,6 +1,6 @@
 # 3D NEXRAD Viewer
 
-A static HTML5 web app that renders NEXRAD Level II reflectivity volumes in 3D
+A static HTML5 web app that renders NEXRAD Level II radar volumes in 3D
 using [Three.js](https://threejs.org/). Runs entirely in the browser — no
 server, no build step.
 
@@ -10,10 +10,16 @@ Live site: https://lordfloofen.github.io/3d-nexrad/ (after first Pages deploy)
 
 - Renders the entire radar volume (all elevation tilts) as a colored point
   cloud, using the NWS reflectivity color scale.
+- A **Product** dropdown switches a single-radar volume between reflectivity
+  (`REF`, dBZ) and base radial velocity (`VEL`, m/s).
 - Beam paths use a 4/3-earth approximation, so points sit at the correct
   height for their slant range and elevation angle.
-- Interactive controls for dBZ threshold, vertical exaggeration, point size,
-  and gate stride (downsampling).
+- Stitches multiple nearby radars into a 3D reflectivity **mosaic**, and can
+  combine their velocities into a **dual-Doppler rotation** product —
+  retrieving the horizontal wind and rendering vertical vorticity so
+  mesocyclones show up objectively (with a one-click synthetic demo).
+- Interactive controls for dBZ threshold (or min velocity / min rotation),
+  vertical exaggeration, point size, and gate stride (downsampling).
 - Ships with a built-in synthetic storm generator so the page is alive on
   first visit.
 - Drop in a real NEXRAD Archive II file (`*_V06`, optionally `.bz2`-wrapped)

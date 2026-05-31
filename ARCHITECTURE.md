@@ -44,7 +44,8 @@ parsing, voxelization, and rendering happens in the browser.
 
 Everything renders as a `THREE.Points` object whose vertex positions are in
 **kilometers** in a local ENU frame (East = +X, Up = +Y, North = -Z), with
-per-vertex colors from the NWS dBZ scale.
+per-vertex colors from the active product's scale — reflectivity (dBZ),
+velocity (m/s), or, for the dual-Doppler mosaic, vorticity (s⁻¹).
 
 ---
 
@@ -143,13 +144,19 @@ Evaluates dBZ at one point in space by max-merging contributions from each
 cell's core and anvil, plus a low-altitude stratiform background and a
 small noise term. Below -30 dBZ becomes NaN (no echo).
 
+### `windAt(xKm, yKm, zKm, cells)`
+Synthetic horizontal wind (m/s, east/north): a southwesterly flow that veers
+and strengthens with height, plus cyclonic rotation near each storm cell so the
+VEL product shows recognizable inbound/outbound couplets.
+
 ### `buildSyntheticVolume(opts) → Volume`
 Sweeps 14 elevation tilts across a full 360° azimuth at 1° spacing and
 460 gates of 250 m spacing. For every (tilt, azimuth, gate) it computes
 beam ground range and height with the 4/3-Earth approximation, samples
-`reflectivityAt`, applies a mild far-range attenuation, and stuffs the
-result into a `Float32Array`. Returns the same shape parsed Level II
-files use (so `setVolume` is shared) plus `synthetic: true`.
+`reflectivityAt`, and — where there's an echo — projects `windAt` onto the beam
+to get a radial velocity. Both moments are packed into the same
+`{ moments: { REF, VEL }, ... }` shape parsed Level II files use (so `setVolume`
+and `tiltMoment` are shared), plus `synthetic: true`.
 
 ---
 
@@ -157,8 +164,10 @@ files use (so `setVolume` is shared) plus `synthetic: true`.
 
 Hand-rolled NEXRAD/TDWR Archive II (Level II) parser. References the
 NWS RDA/RPG ICD ("Build 19"). Only what's needed for visualization is
-implemented — currently just the REF (reflectivity) moment from Type 31
-digital radar messages.
+implemented — the `REF` (reflectivity, dBZ) and `VEL` (base radial
+velocity, m/s) moments from Type 31 digital radar messages. The set of
+extracted moments is the `MOMENTS` constant; spectrum width and dual-pol
+moments are present in the file but skipped.
 
 ### `getBzip2()`
 Lazily imports `seek-bzip` from esm.sh on first use. Cached as a Promise
@@ -178,16 +187,20 @@ offsets, so a positional reader is the cleanest approach.
 Concatenates an array of `Uint8Array`s into one. Currently unused but kept
 because LDM record reassembly across segments could need it.
 
+### `parseMomentBlock(u8, blockPos, msgEndPos)`
+Decodes one moment data block. Returns `{ name, numGates, firstGate,
+gateSpacing, data: Float32Array }`, or null if the block isn't a moment in
+`MOMENTS` or runs past the message bounds. Reads the block's
+scale/offset/word-size header and dequantizes raw byte/halfword values into
+physical units (dBZ for REF, m/s for VEL). Raw values 0 (below threshold)
+and 1 (range folded) become NaN so they don't render.
+
 ### `parseMessage31(r, msgEndPos)`
 Parses one Type 31 digital radar message (one radial). Returns
-`{ elevation, azimuth, elevationNumber, ref }` where `ref` is null if no
-REF data block is present, otherwise
-`{ numGates, firstGate, gateSpacing, data: Float32Array }`.
-
-The radial header gives 9 data-block pointers; the parser walks them
-looking for the one tagged `'REF'`, decodes its scale/offset/word-size
-header, and dequantizes raw byte/halfword values into dBZ. Raw values 0
-(below threshold) and 1 (range folded) become NaN so they don't render.
+`{ elevation, azimuth, elevationNumber, moments }` where `moments` is a map
+keyed by moment name (e.g. `{ REF, VEL }`) and may be empty. The radial
+header gives the data-block pointers; the parser walks them and runs each
+through `parseMomentBlock`, keeping the ones it handles.
 
 ### `parseMessageStream(buf, station, accum)`
 Walks one decompressed LDM block byte-by-byte. Each Level II message has
@@ -201,13 +214,23 @@ giving up.
 ### `class Accumulator`
 Groups radials into elevation tilts as they arrive.
 - `addRadial(station, m)` — keys by `elevationNumber` (or rounded
-  elevation as a fallback). Tracks per-tilt gate count, gate spacing, and
-  first-gate offset; appends each radial's azimuth and reflectivity data.
+  elevation as a fallback). Appends each radial's azimuth and its full
+  `moments` map.
 - `finalize()` — sorts tilts by elevation angle, sorts radials within each
-  tilt by azimuth, and packs everything into the renderer-friendly form:
-  `{ elevationDeg, azimuthsDeg: Float32Array, gateSpacingM, firstGateM,
-  gates, reflectivity: Float32Array(azCount * gates), missingValue: NaN }`.
-  Short rows are NaN-padded so all radials in a tilt share one stride.
+  tilt by azimuth, and packs each moment separately into the
+  renderer-friendly form. Each tilt becomes
+  `{ elevationDeg, azimuthsDeg: Float32Array, moments: { REF, VEL, ... },
+  reflectivity, missingValue: NaN }`, where every packed moment is
+  `{ gates, gateSpacingM, firstGateM, data: Float32Array(azCount * gates) }`
+  and `reflectivity` is kept as a legacy alias for `moments.REF.data`. Moments
+  are packed independently, so a split cut (velocity on a separate elevation
+  scan from reflectivity) is handled per moment. Short rows are NaN-padded so
+  all radials in a tilt share one stride.
+
+### `tiltMoment(tilt, name)`
+Accessor that returns a tilt's packed moment by name (`'REF'`/`'VEL'`), or
+null. Falls back to the legacy top-level `reflectivity` shape for `'REF'`, so
+both parsed volumes and the synthetic generators work through one interface.
 
 ### `parseLevel2(arrayBuffer, filename) → Volume`
 Top-level entry point. Steps:
@@ -404,34 +427,59 @@ respects it.
 Returns the OSM/CARTO credit string so the UI can render it in the
 corner.
 
+#### Product state: `product` / `mosaicProduct` / `effectiveProduct()`
+Single-radar volumes use `product` (`'REF'`|`'VEL'`); mosaics use
+`mosaicProduct` (`'REF'`|`'ROT'`). `effectiveProduct()` returns whichever
+applies to the current mode, and the UI legend follows it. `setProduct(p)`
+and `setMosaicProduct(p)` set the field and re-render the current scene if it
+matches that mode.
+
 #### `setOption(key, value)`
-Updates one of `threshold`, `verticalExaggeration`, `pointSize`, `stride`.
-A threshold or stride change triggers a full re-render via `setVolume`/
-`setMosaic` (returns the new info object so the stats panel can update).
-Vertical exaggeration just rescales the world group; point size just
-mutates the material.
+Updates one of `threshold` (REF dBZ floor), `velMin` (VEL min |velocity|),
+`vortMinShow` (ROT min |vorticity| display filter), `verticalExaggeration`,
+`pointSize`, or `stride`. A change that affects geometry/coloring triggers a
+full re-render via `setVolume`/`setMosaic` (returning the new info object so
+the stats panel can update); `velMin` only re-renders volumes and
+`vortMinShow` only re-renders mosaics. Vertical exaggeration just rescales
+the world group; point size just mutates the material.
 
 #### `setVolume(volume)`
-Single-radar render path. Clears existing points, resizes decorations to
-230 km, drops a basemap if the volume has lat/lon, then walks every
-(tilt, azimuth, gate) of the input volume:
-- Skips gates below `threshold` dBZ.
-- Skips gates beyond 230 km slant range.
+Single-radar render path, product-aware. Clears existing points, resizes
+decorations to 230 km, drops a basemap if the volume has lat/lon, then walks
+every (tilt, azimuth, gate) of the selected moment (`tiltMoment`):
+- REF skips gates below `threshold` dBZ; VEL skips gates with |velocity| below
+  `velMin`. Both skip gates beyond 230 km slant range.
 - Computes ground range from `slantKm * cos(elev)`, height from
   `beamHeightKm`, and pushes a point at `(sinA*ground, height,
   -cosA*ground)` (azimuth 0 = north).
-- Pushes per-vertex color from `dbzToColor`.
+- Colors from `dbzToColor` (REF) or `velToColor` (VEL). Velocity uses a
+  symmetric, data-fit domain: a pre-pass finds the max |velocity| (clamped to
+  20–60 m/s) so the diverging scale spans the actual extremes; that `vmax` is
+  stashed on `lastVelMax` for the legend.
 
-Returns `{ pointCount, maxDbz }` for the stats panel.
+Returns `{ pointCount, product, isVel, units, peak, maxDbz }` for the stats
+panel.
 
 #### `setMosaic(mosaic)`
-Multi-radar render path. The hard work was already done by
-`buildMosaic` / `revoxelizeMosaic` — this just walks
-`mosaic.points` (already in ENU km) and pushes them as world-space points
-above the threshold. After installing the points it adds a teal center
-beacon at the origin and a station marker per contributing radar (yellow
-dot for WSR-88D, smaller cyan dot for TDWR, with a vertical stem so they
-don't get lost in the voxel cloud).
+Multi-radar render path. Clears points/markers and resizes decorations, then
+dispatches on `mosaicProduct`: `_renderRotation` if `'ROT'` and a rotation
+field is present, otherwise `_renderReflectivityMosaic`. Afterwards it adds a
+teal center beacon at the origin and a station marker per contributing radar
+(yellow dot for WSR-88D, smaller cyan dot for TDWR, with a vertical stem so
+they don't get lost in the cloud). Returns the chosen path's info object.
+
+#### `_renderReflectivityMosaic(mosaic)`
+Walks `mosaic.points` (already in ENU km from `buildMosaic`/
+`revoxelizeMosaic`) and pushes those above `threshold` as world-space points
+colored by `dbzToColor`. Returns `{ pointCount, product: 'REF', maxDbz, ... }`.
+
+#### `_renderRotation(mosaic)`
+Renders `mosaic.rotation.points`: each solved cell colored by vertical
+vorticity via `vortToColor` over a symmetric, data-fit domain (clamped to
+0.008–0.04 s⁻¹, stashed on `lastVortMax` for the legend), skipping cells below
+the `vortMinShow` filter. Adds a `_makeRotationCore` column marker per detected
+core. Returns `{ pointCount, product: 'ROT', isRotation, peak, vortMax,
+coreCount, ... }`.
 
 #### `_installPoints(positions, colors)`
 Builds a `BufferGeometry` from flat number arrays, attaches it to a
@@ -468,6 +516,11 @@ Colored dot (yellow for WSR-88D, cyan for TDWR) plus a translucent stem
 6 km tall so the marker is visible through dense voxel clouds. Position
 comes from the precomputed `enu` offset.
 
+#### `_makeRotationCore(core, vmax)`
+A translucent vertical column + ground ring at a detected rotation core,
+tinted by `vortToColor(core.vort, vmax)` so cyclonic (orange) vs anticyclonic
+(purple) reads at a glance.
+
 #### `_resize()` / `_animate()`
 Standard three.js DPR-aware resize and `requestAnimationFrame` loop.
 `controls.update()` is needed because `enableDamping` is on.
@@ -483,9 +536,13 @@ and event listeners.
 ### `$(id)`
 Tiny `document.getElementById` shorthand.
 
-### `buildLegend()`
-Builds the on-screen dBZ legend by walking `legendStops()` and rendering
-a swatch + label per stop. Called once at startup.
+### `legendRow(c, text)` / `refreshLegend()`
+`refreshLegend()` rebuilds the on-screen legend to match whatever the renderer
+is actually drawing, keyed off `scene.effectiveProduct()`: the dBZ scale
+(`legendStops`) for REF, the data-fit velocity scale (`velLegendStops`,
+`scene.lastVelMax`) for VEL, or the vorticity scale (`vortLegendStops`,
+`scene.lastVortMax`) for ROT. `legendRow` renders one swatch + label. Called at
+startup and after every product/render change.
 
 ### `showLoader(text)` / `hideLoader()`
 Toggle the full-screen loading overlay with a status message.
@@ -501,18 +558,31 @@ shows the station, scan timestamp, and tilt/gate counts.
 ### `applyVolume(volume)`
 Hands a volume to `scene.setVolume` and updates the stats panel.
 
+### Product selector (`PRODUCT_UI`, `applyProductUI`, `setProductOptions`, `selectMosaicProduct`)
+The Product dropdown is mode-aware: `setProductOptions(mode)` repopulates it
+with REF/VEL for single radar or REF/ROT for mosaics. `PRODUCT_UI` maps each
+product to how the shared threshold slider behaves (a dBZ floor for REF, min
+|velocity| for VEL, min rotation for ROT), and each product remembers its own
+slider value. The change handler routes single-radar products to
+`scene.setProduct`; for mosaics, `selectMosaicProduct` lazily synthesizes the
+rotation field (`buildRotationField`, under a loader) on first switch to ROT,
+re-renders, refreshes the legend, and surfaces QC toasts (too few velocity
+radars, or the aliasing caveat).
+
 ### Display-control listeners (`threshold`, `vexag`, `psize`, `stride`,
 `show-basemap`, `show-ground`, `show-rings`, `auto-rotate`)
 Forward slider/checkbox changes to `scene.setOption` (or directly to
-`scene.set*` for boolean toggles). The `stride` listener has a special
-case for mosaic mode: changing stride means re-running `ingestVolume` for
-every cached station, so it debounces 120 ms to coalesce drag events
-into one `revoxelizeMosaic` call.
+`scene.set*` for boolean toggles). The `threshold` slider is reused per
+product via `PRODUCT_UI[effectiveProduct()].optKey`. The `stride` listener has
+a special case for mosaic mode: changing stride means re-running `ingestVolume`
+for every cached station, so it debounces 120 ms to coalesce drag events into
+one `revoxelizeMosaic` call (and invalidates any cached rotation field).
 
 ### Mode tabs
-Two tabs: "Single radar" and "Mosaic". Switching tabs shows/hides panes
-and lazily initializes the corresponding Leaflet map (`ensureSingleMap`
-or `ensureMap`) — neither map exists until its tab is first shown.
+Two tabs: "Single radar" and "Mosaic". Switching tabs shows/hides panes,
+lazily initializes the corresponding Leaflet map (`ensureSingleMap` or
+`ensureMap`) — neither map exists until its tab is first shown — and
+repopulates the Product dropdown for the active mode via `setProductOptions`.
 
 ### Single-radar mode
 - `singleState` — `{ map, stationLayer, selectedMarker, station }`.
@@ -564,10 +634,15 @@ or `ensureMap`) — neither map exists until its tab is first shown.
   `runMosaicBuild` directly, so the flag covers the second path.
 - `runMosaicBuild()` — Reads the picker, calls `buildMosaic` with the
   current sliders, threads a progress callback that updates per-station
-  status chips and the full-screen loader, then hands the finished
-  mosaic to `scene.setMosaic` and updates the stats panel. Failures show
+  status chips and the full-screen loader, synthesizes the rotation field
+  first if the ROT product is selected, then hands the finished mosaic to
+  `scene.setMosaic` and updates the stats panel and legend. Failures show
   a toast.
 - `mosaic-build` button click handler — Just calls `runMosaicBuild`.
+- `rotation-demo` button handler — Builds a synthetic multi-radar scene
+  (`buildSyntheticMosaic`), voxelizes it (`revoxelizeMosaic`), synthesizes
+  the rotation field (`buildRotationField`), then renders it as the ROT
+  product. An alias-free, no-network way to see and validate dual-Doppler.
 
 ### Initial state
 - A synthetic demo volume is rendered immediately on first paint so the
