@@ -7,7 +7,7 @@
 
 import { STATIONS, stationReachKm, stationGateKm } from './stations.js';
 import { haversineKm, lonLatToEnuKm, beamHeightKm } from './geo.js';
-import { parseLevel2 } from './nexrad.js';
+import { parseLevel2, tiltMoment } from './nexrad.js';
 
 // Use Unidata's NEXRAD Level II mirror instead of noaa-nexrad-level2:
 // (1) NOAA's bucket now rejects unsigned anonymous requests with 403, even for
@@ -197,9 +197,13 @@ function ingestVolume(grid, volume, station, center, opts) {
   const maxRangeKm = opts.maxRangeKm ?? stationGateKm(station);
 
   for (const tilt of volume.tilts) {
+    // Mosaics composite reflectivity only; skip velocity-only split cuts.
+    const ref = tiltMoment(tilt, 'REF');
+    if (!ref) continue;
     const elevRad = tilt.elevationDeg * Math.PI / 180;
     const cosE = Math.cos(elevRad);
-    const { gates, gateSpacingM, firstGateM, azimuthsDeg, reflectivity } = tilt;
+    const { gates, gateSpacingM, firstGateM, data: reflectivity } = ref;
+    const { azimuthsDeg } = tilt;
     const azCount = azimuthsDeg.length;
     for (let a = 0; a < azCount; a++) {
       const az = azimuthsDeg[a];

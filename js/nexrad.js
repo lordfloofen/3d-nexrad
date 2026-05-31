@@ -67,9 +67,56 @@ function concatU8(parts) {
   return out;
 }
 
+// Moments we extract from Type 31 messages. REF = reflectivity (dBZ),
+// VEL = base radial velocity (m/s). Other moments (spectrum width, dual-pol)
+// are present in the file but skipped.
+const MOMENTS = new Set(['REF', 'VEL']);
+
+// Decode a single moment data block (REF/VEL/...) at absolute offset blockPos.
+// Returns { name, numGates, firstGate, gateSpacing, data } or null if the block
+// is not a moment we handle or runs past the message bounds.
+function parseMomentBlock(u8, blockPos, msgEndPos) {
+  const br = new BinReader(u8, blockPos);
+  br.u8r();                 // 'D'
+  const name = br.ascii(3); // moment name, e.g. 'REF' / 'VEL'
+  if (!MOMENTS.has(name)) return null;
+  br.u32();                 // reserved
+  const numGates = br.u16();
+  const firstGate = br.i16();   // meters
+  const gateSpacing = br.i16(); // meters
+  br.i16();                 // tover (threshold)
+  br.i16();                 // snr threshold
+  br.u8r();                 // control flags
+  const wordSize = br.u8r();
+  const scale = br.f32();
+  const offset = br.f32();
+  const dataStart = br.pos;
+  const bytesPerGate = wordSize === 16 ? 2 : 1;
+  const dataLen = numGates * bytesPerGate;
+  if (dataStart + dataLen > msgEndPos) return null;
+
+  const out = new Float32Array(numGates);
+  for (let g = 0; g < numGates; g++) {
+    let raw;
+    if (bytesPerGate === 2) {
+      raw = (u8[dataStart + g * 2] << 8) | u8[dataStart + g * 2 + 1];
+    } else {
+      raw = u8[dataStart + g];
+    }
+    if (raw < 2 || !scale) {
+      // 0 = below threshold, 1 = range folded (ambiguous), no scale = unusable
+      out[g] = NaN;
+    } else {
+      out[g] = (raw - offset) / scale;
+    }
+  }
+  return { name, numGates, firstGate, gateSpacing, data: out };
+}
+
 // Parse a single Type 31 digital radar message starting at r.pos.
 // `msgEndPos` is the absolute end of the message in r's buffer.
-// Returns { elevation, azimuth, elevationNumber, ref } where ref may be null.
+// Returns { elevation, azimuth, elevationNumber, moments } where `moments` is a
+// map keyed by moment name (e.g. { REF, VEL }) and may be empty.
 function parseMessage31(r, msgEndPos) {
   const msgStart = r.pos;
   r.ascii(4);            // ICAO
@@ -93,55 +140,17 @@ function parseMessage31(r, msgEndPos) {
   // 9 fixed pointers per ICD
   for (let i = 0; i < 9; i++) blockOffsets.push(r.u32());
 
-  let ref = null;
+  const moments = {};
   for (let i = 0; i < dataBlockCount && i < blockOffsets.length; i++) {
     const off = blockOffsets[i];
     if (off === 0) continue;
     const blockPos = msgStart + off;
     if (blockPos < 0 || blockPos + 28 > msgEndPos) continue;
-    // Peek block name
-    const name = String.fromCharCode(
-      r.u8[blockPos + 1], r.u8[blockPos + 2], r.u8[blockPos + 3]
-    );
-    if (name !== 'REF') continue;
-
-    const br = new BinReader(r.u8, blockPos);
-    br.u8r();                 // 'D'
-    br.ascii(3);              // 'REF'
-    br.u32();                 // reserved
-    const numGates = br.u16();
-    const firstGate = br.i16();   // meters
-    const gateSpacing = br.i16(); // meters
-    br.i16();                 // tover (threshold)
-    br.i16();                 // snr threshold
-    br.u8r();                 // control flags
-    const wordSize = br.u8r();
-    const scale = br.f32();
-    const offset = br.f32();
-    const dataStart = br.pos;
-    const bytesPerGate = wordSize === 16 ? 2 : 1;
-    const dataLen = numGates * bytesPerGate;
-    if (dataStart + dataLen > msgEndPos) continue;
-
-    const out = new Float32Array(numGates);
-    for (let g = 0; g < numGates; g++) {
-      let raw;
-      if (bytesPerGate === 2) {
-        raw = (r.u8[dataStart + g * 2] << 8) | r.u8[dataStart + g * 2 + 1];
-      } else {
-        raw = r.u8[dataStart + g];
-      }
-      if (raw < 2) {
-        // 0 = below threshold, 1 = range folded
-        out[g] = NaN;
-      } else {
-        out[g] = (raw - offset) / scale;
-      }
-    }
-    ref = { numGates, firstGate, gateSpacing, data: out };
+    const mb = parseMomentBlock(r.u8, blockPos, msgEndPos);
+    if (mb) moments[mb.name] = mb;
   }
 
-  return { elevation, azimuth, elevationNumber, ref };
+  return { elevation, azimuth, elevationNumber, moments };
 }
 
 // Parse a stream of messages (one decompressed LDM block).
@@ -197,7 +206,9 @@ function parseMessageStream(buf, station, accum) {
     if (messageType === 31) {
       try {
         const m31 = parseMessage31(r, msgEnd);
-        if (m31.ref) accum.addRadial(station, m31);
+        if (m31.moments && (m31.moments.REF || m31.moments.VEL)) {
+          accum.addRadial(station, m31);
+        }
       } catch (e) {
         // skip malformed
       }
@@ -208,7 +219,7 @@ function parseMessageStream(buf, station, accum) {
 
 class Accumulator {
   constructor() {
-    this.tilts = new Map(); // elevationNumber -> { elevation, gateSpacing, firstGate, gates, radials: [] }
+    this.tilts = new Map(); // elevationNumber -> { elevation, radials: [] }
     this.station = null;
   }
   addRadial(station, m) {
@@ -219,43 +230,88 @@ class Accumulator {
       tilt = {
         elevationNumber: m.elevationNumber,
         elevation: m.elevation,
-        gateSpacing: m.ref.gateSpacing,
-        firstGate: m.ref.firstGate,
-        gates: m.ref.numGates,
         radials: [],
       };
       this.tilts.set(key, tilt);
     }
-    // Use the largest gate count seen for this tilt
-    if (m.ref.numGates > tilt.gates) tilt.gates = m.ref.numGates;
-    tilt.radials.push({ azimuth: m.azimuth, data: m.ref.data });
+    tilt.radials.push({ azimuth: m.azimuth, moments: m.moments });
+  }
+  // Pack one moment (e.g. REF/VEL) across a tilt's radials into a dense
+  // azimuth-major Float32Array. Radials missing the moment (split cuts where
+  // only one moment is scanned) are filled with NaN.
+  _packMoment(radials, name) {
+    let gates = 0, gateSpacing = 250, firstGate = 0, seen = false;
+    for (const r of radials) {
+      const mb = r.moments[name];
+      if (!mb) continue;
+      if (mb.numGates > gates) gates = mb.numGates;
+      if (!seen) { gateSpacing = mb.gateSpacing; firstGate = mb.firstGate; seen = true; }
+    }
+    if (!seen) return null;
+    const data = new Float32Array(radials.length * gates);
+    for (let i = 0; i < radials.length; i++) {
+      const mb = radials[i].moments[name];
+      const off = i * gates;
+      if (mb) {
+        const n = Math.min(mb.data.length, gates);
+        for (let g = 0; g < n; g++) data[off + g] = mb.data[g];
+        for (let g = n; g < gates; g++) data[off + g] = NaN;
+      } else {
+        for (let g = 0; g < gates; g++) data[off + g] = NaN;
+      }
+    }
+    return { gates, gateSpacingM: gateSpacing, firstGateM: firstGate, data };
   }
   finalize() {
     const sorted = [...this.tilts.values()].sort((a, b) => a.elevation - b.elevation);
-    return sorted.map(t => {
-      // Sort radials by azimuth and pack into a 2D array
+    const tilts = [];
+    for (const t of sorted) {
+      // Sort radials by azimuth, then pack every moment present in the tilt.
       t.radials.sort((a, b) => a.azimuth - b.azimuth);
       const az = new Float32Array(t.radials.length);
-      const refl = new Float32Array(t.radials.length * t.gates);
-      for (let i = 0; i < t.radials.length; i++) {
-        az[i] = t.radials[i].azimuth;
-        const src = t.radials[i].data;
-        const off = i * t.gates;
-        const n = Math.min(src.length, t.gates);
-        for (let g = 0; g < n; g++) refl[off + g] = src[g];
-        for (let g = n; g < t.gates; g++) refl[off + g] = NaN;
+      for (let i = 0; i < t.radials.length; i++) az[i] = t.radials[i].azimuth;
+
+      const names = new Set();
+      for (const r of t.radials) for (const k in r.moments) names.add(k);
+      const moments = {};
+      for (const name of names) {
+        const packed = this._packMoment(t.radials, name);
+        if (packed) moments[name] = packed;
       }
-      return {
+      if (!Object.keys(moments).length) continue;
+
+      // Keep top-level REF fields as aliases so older consumers (synthetic
+      // volumes, the mosaic ingest) keep working unchanged.
+      const ref = moments.REF;
+      tilts.push({
         elevationDeg: t.elevation,
         azimuthsDeg: az,
-        gateSpacingM: t.gateSpacing,
-        firstGateM: t.firstGate,
-        gates: t.gates,
-        reflectivity: refl,
+        moments,
+        gates: ref ? ref.gates : 0,
+        gateSpacingM: ref ? ref.gateSpacingM : 250,
+        firstGateM: ref ? ref.firstGateM : 0,
+        reflectivity: ref ? ref.data : null,
         missingValue: NaN,
-      };
-    });
+      });
+    }
+    return tilts;
   }
+}
+
+// Look up a moment's gridded data for a tilt, tolerating both the new
+// `moments` map and the legacy top-level `reflectivity` shape used by
+// synthetic volumes. Returns { gates, gateSpacingM, firstGateM, data } or null.
+export function tiltMoment(tilt, name) {
+  if (tilt.moments && tilt.moments[name]) return tilt.moments[name];
+  if (name === 'REF' && tilt.reflectivity) {
+    return {
+      gates: tilt.gates,
+      gateSpacingM: tilt.gateSpacingM,
+      firstGateM: tilt.firstGateM,
+      data: tilt.reflectivity,
+    };
+  }
+  return null;
 }
 
 export async function parseLevel2(arrayBuffer, filename = '') {
@@ -322,7 +378,7 @@ export async function parseLevel2(arrayBuffer, filename = '') {
 
   const tilts = accum.finalize();
   if (tilts.length === 0) {
-    throw new Error('Parsed file but found no reflectivity data. The file may use an unsupported moment or build.');
+    throw new Error('Parsed file but found no reflectivity or velocity data. The file may use an unsupported moment or build.');
   }
 
   const loc = STATION_LOCATIONS[station] || { lat: 0, lon: 0, elev: 0 };

@@ -283,6 +283,30 @@ input[type="datetime-local"] {
 }
 .hint a { color: var(--accent); }
 
+.select-row {
+  display: block;
+  margin-bottom: 14px;
+}
+.select-row > span {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.select-row select {
+  width: 100%;
+  background: rgba(0, 212, 255, 0.06);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: inherit;
+  color-scheme: dark;
+  cursor: pointer;
+}
+.select-row select:disabled { opacity: 0.45; cursor: not-allowed; }
+
 .slider-row {
   display: block;
   margin-bottom: 12px;

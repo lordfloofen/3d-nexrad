@@ -72,9 +72,18 @@ GitHub Pages on every push to `main`. To enable:
 - Three.js is loaded from `unpkg` via an import map.
 - The bzip2 decoder ([`seek-bzip`](https://www.npmjs.com/package/seek-bzip))
   is loaded on-demand from `esm.sh` only when the user uploads a real file.
-- Only the reflectivity (`REF`) moment from Type 31 messages is parsed. Velocity,
-  spectrum width, dual-pol moments, and split cuts are ignored. This keeps the
-  parser small while still producing a recognizable storm structure.
+- Two moments are parsed from Type 31 messages: reflectivity (`REF`, dBZ) and
+  base radial velocity (`VEL`, m/s). Pick between them with the **Product**
+  dropdown. Spectrum width and dual-pol moments are still ignored. Split cuts
+  are handled per moment, so the velocity Doppler cut renders even when it's a
+  separate elevation scan from the reflectivity surveillance cut.
+- The velocity scale is a colorblind-friendly diverging ramp (ColorBrewer
+  RdBu): cool/blue = inbound (toward the radar), warm/red = outbound (away).
+  This avoids the classic green/red Doppler scheme, which is the hardest case
+  for red-green color-vision deficiency.
+- Velocity is a single-radar product. The multi-radar mosaic composites
+  reflectivity only, since radial velocity is measured relative to each radar
+  and isn't directly comparable between sites.
 
 ## License
 
