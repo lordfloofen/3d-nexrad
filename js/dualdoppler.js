@@ -193,16 +193,20 @@ function nmsCores(candidates, maxCores, radiusKm = 4) {
 
 // Dual-Doppler crossing quality at a horizontal point: |sin β| of the best
 // beam-crossing angle among all radar pairs viewing it. 0 along a baseline
-// (parallel beams, no skill), 1 when a pair views it at 90°. radars is a list
-// of { e, n } in the mosaic ENU frame.
-function crossingQualityAt(eKm, nKm, radars) {
+// (parallel beams, no skill), 1 when a pair views it at 90°. A pair only counts
+// if *both* radars are within `maxRangeKm` of the point — beyond that range a
+// radar contributes no gates, so the geometry there is moot and would otherwise
+// overstate coverage. radars is a list of { e, n } in the mosaic ENU frame.
+function crossingQualityAt(eKm, nKm, radars, maxRangeKm = Infinity) {
   let best = 0;
   for (let i = 0; i < radars.length; i++) {
     const ax = radars[i].e - eKm, ay = radars[i].n - nKm;
     const al = Math.hypot(ax, ay) || 1e-6;
+    if (al > maxRangeKm) continue;
     for (let j = i + 1; j < radars.length; j++) {
       const bx = radars[j].e - eKm, by = radars[j].n - nKm;
       const bl = Math.hypot(bx, by) || 1e-6;
+      if (bl > maxRangeKm) continue;
       const q = Math.abs((ax * by - ay * bx) / (al * bl)); // |sin(angle between)|
       if (q > best) best = q;
     }
@@ -212,17 +216,19 @@ function crossingQualityAt(eKm, nKm, radars) {
 
 // Sample the dual-Doppler lobe (where the geometry is good enough to trust)
 // over a horizontal grid. Depends only on radar positions, not the data, so it
-// shows even where there's no echo. Returns nodes above a quality floor.
+// shows even where there's no echo — but is clipped to where at least one pair
+// of radars is actually in range, so it can't overstate coverage.
 function computeLobeGrid(radars, radiusKm, opts) {
   if (radars.length < 2) return { spacingKm: 0, nodes: [] };
   const spacing = opts.lobeSpacingKm ?? 6;
   const qFloor = opts.lobeQFloor ?? 0.4;
+  const maxRangeKm = opts.maxRangeKm ?? 230; // matches ingestVelocity's default
   const R = radiusKm * 1.15;
   const nodes = [];
   for (let e = -R; e <= R; e += spacing) {
     for (let n = -R; n <= R; n += spacing) {
       if (Math.hypot(e, n) > R) continue;
-      const q = crossingQualityAt(e, n, radars);
+      const q = crossingQualityAt(e, n, radars, maxRangeKm);
       if (q >= qFloor) nodes.push({ e, n, q });
     }
   }
@@ -231,10 +237,10 @@ function computeLobeGrid(radars, radiusKm, opts) {
 
 // Decorate each detected core with a real-world position and a trust flag so
 // the UI can list and locate it.
-function enrichCores(cores, radars, center) {
+function enrichCores(cores, radars, center, maxRangeKm = 230) {
   return cores.map(c => {
     const { lat, lon } = enuKmToLonLat(c.x, c.y, center.lat, center.lon);
-    const qGeom = crossingQualityAt(c.x, c.y, radars);
+    const qGeom = crossingQualityAt(c.x, c.y, radars, maxRangeKm);
     return {
       ...c,
       lat, lon,
@@ -286,8 +292,9 @@ export function buildRotationField(mosaic, opts = {}) {
     });
   });
 
+  const maxRangeKm = opts.maxRangeKm ?? 230;
   const { points } = solveGrid(grid, opts);
-  const cores = enrichCores(detectCores(points, opts), radarsEnu, center);
+  const cores = enrichCores(detectCores(points, opts), radarsEnu, center, maxRangeKm);
   const lobe = computeLobeGrid(radarsEnu, mosaic.radiusKm || 150, opts);
 
   // Velocity from Level II is folded at ±Nyquist and we do not dealias yet, so
