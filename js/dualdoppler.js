@@ -25,6 +25,7 @@
 
 import { lonLatToEnuKm, enuKmToLonLat, beamHeightKm } from './geo.js';
 import { tiltMoment } from './nexrad.js';
+import { stationGateKm } from './stations.js';
 
 class DualDopplerGrid {
   constructor(sizeXkm = 2, sizeYkm = 2, sizeZkm = 1) {
@@ -66,7 +67,9 @@ function ingestVelocity(grid, volume, station, center, bit, opts) {
     center.lat, center.lon, center.elev ?? 0
   );
   const stride = opts.stride || 2;
-  const maxRangeKm = opts.maxRangeKm ?? 230;
+  // Per-station usable gate range, matching the REF mosaic's ingestVolume:
+  // a TDWR only reaches ~90 km, a WSR-88D ~230 km.
+  const maxRangeKm = opts.maxRangeKm ?? stationGateKm(station);
   const maxElevDeg = opts.maxElevDeg ?? 7; // low tilts only: keeps the neglected-w error small
   // Storm-motion advection: this volume was scanned `dt` before the reference
   // time, so shift its gates downstream to where the storm has since moved,
@@ -194,19 +197,20 @@ function nmsCores(candidates, maxCores, radiusKm = 4) {
 // Dual-Doppler crossing quality at a horizontal point: |sin β| of the best
 // beam-crossing angle among all radar pairs viewing it. 0 along a baseline
 // (parallel beams, no skill), 1 when a pair views it at 90°. A pair only counts
-// if *both* radars are within `maxRangeKm` of the point — beyond that range a
-// radar contributes no gates, so the geometry there is moot and would otherwise
-// overstate coverage. radars is a list of { e, n } in the mosaic ENU frame.
-function crossingQualityAt(eKm, nKm, radars, maxRangeKm = Infinity) {
+// if *both* radars are within their own usable range (`radar.range`, km) of the
+// point — beyond it a radar contributes no gates, so a WSR-88D + TDWR pair can't
+// claim coverage out at 230 km where the TDWR (~90 km) has nothing. radars is a
+// list of { e, n, range } in the mosaic ENU frame.
+function crossingQualityAt(eKm, nKm, radars) {
   let best = 0;
   for (let i = 0; i < radars.length; i++) {
     const ax = radars[i].e - eKm, ay = radars[i].n - nKm;
     const al = Math.hypot(ax, ay) || 1e-6;
-    if (al > maxRangeKm) continue;
+    if (al > (radars[i].range ?? Infinity)) continue;
     for (let j = i + 1; j < radars.length; j++) {
       const bx = radars[j].e - eKm, by = radars[j].n - nKm;
       const bl = Math.hypot(bx, by) || 1e-6;
-      if (bl > maxRangeKm) continue;
+      if (bl > (radars[j].range ?? Infinity)) continue;
       const q = Math.abs((ax * by - ay * bx) / (al * bl)); // |sin(angle between)|
       if (q > best) best = q;
     }
@@ -222,13 +226,12 @@ function computeLobeGrid(radars, radiusKm, opts) {
   if (radars.length < 2) return { spacingKm: 0, nodes: [] };
   const spacing = opts.lobeSpacingKm ?? 6;
   const qFloor = opts.lobeQFloor ?? 0.4;
-  const maxRangeKm = opts.maxRangeKm ?? 230; // matches ingestVelocity's default
   const R = radiusKm * 1.15;
   const nodes = [];
   for (let e = -R; e <= R; e += spacing) {
     for (let n = -R; n <= R; n += spacing) {
       if (Math.hypot(e, n) > R) continue;
-      const q = crossingQualityAt(e, n, radars, maxRangeKm);
+      const q = crossingQualityAt(e, n, radars);
       if (q >= qFloor) nodes.push({ e, n, q });
     }
   }
@@ -237,10 +240,10 @@ function computeLobeGrid(radars, radiusKm, opts) {
 
 // Decorate each detected core with a real-world position and a trust flag so
 // the UI can list and locate it.
-function enrichCores(cores, radars, center, maxRangeKm = 230) {
+function enrichCores(cores, radars, center) {
   return cores.map(c => {
     const { lat, lon } = enuKmToLonLat(c.x, c.y, center.lat, center.lon);
-    const qGeom = crossingQualityAt(c.x, c.y, radars, maxRangeKm);
+    const qGeom = crossingQualityAt(c.x, c.y, radars);
     return {
       ...c,
       lat, lon,
@@ -281,7 +284,7 @@ export function buildRotationField(mosaic, opts = {}) {
     withVel++;
     const s = entry.station;
     const enu = lonLatToEnuKm(s.lat, s.lon, s.elev, center.lat, center.lon, center.elev ?? 0);
-    radarsEnu.push({ e: enu.e, n: enu.n, id: s.id });
+    radarsEnu.push({ e: enu.e, n: enu.n, id: s.id, range: opts.maxRangeKm ?? stationGateKm(s) });
     const dtSec = (refMs - (entry.time ? entry.time.getTime() : refMs)) / 1000;
     ingestVelocity(grid, volume, s, center, 1 << i, {
       stride: opts.stride ?? mosaic.stride ?? 2,
@@ -292,9 +295,8 @@ export function buildRotationField(mosaic, opts = {}) {
     });
   });
 
-  const maxRangeKm = opts.maxRangeKm ?? 230;
   const { points } = solveGrid(grid, opts);
-  const cores = enrichCores(detectCores(points, opts), radarsEnu, center, maxRangeKm);
+  const cores = enrichCores(detectCores(points, opts), radarsEnu, center);
   const lobe = computeLobeGrid(radarsEnu, mosaic.radiusKm || 150, opts);
 
   // Velocity from Level II is folded at ±Nyquist and we do not dealias yet, so
