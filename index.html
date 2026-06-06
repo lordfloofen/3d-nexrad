@@ -105,6 +105,28 @@
           <button id="rotation-demo" class="btn btn-ghost">Load synthetic rotation demo</button>
         </section>
 
+        <section class="panel-section hidden" id="rotation-tools">
+          <h2>Rotation tools</h2>
+          <label class="check-row">
+            <input type="checkbox" id="show-lobe" checked />
+            <span>Dual-Doppler lobe overlay</span>
+          </label>
+          <p class="hint-text">Storm motion advects each radar's scan to a common time before
+            synthesis — important when radars don't scan simultaneously. Leave at 0 to disable.</p>
+          <div class="motion-row">
+            <label class="num-field">
+              <span>Motion from°</span>
+              <input type="number" id="motion-dir" min="0" max="360" step="5" value="0" />
+            </label>
+            <label class="num-field">
+              <span>Speed (kt)</span>
+              <input type="number" id="motion-spd" min="0" max="120" step="1" value="0" />
+            </label>
+          </div>
+          <p class="hint-text" id="rotation-meta">—</p>
+          <div id="core-list" class="core-list"></div>
+        </section>
+
       </div>
 
       <!-- ============== SHARED DISPLAY CONTROLS ============== -->

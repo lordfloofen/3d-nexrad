@@ -67,6 +67,11 @@ to a tangent plane at `(lat0, lon0, elev0)`. Used to place each radar's
 gates into a common Cartesian frame for the mosaic, and to position
 station markers in the 3D scene.
 
+### `enuKmToLonLat(eKm, nKm, lat0, lon0) → { lat, lon }`
+Inverse of `lonLatToEnuKm` (horizontal only): turns a local East/North offset
+back into geographic coordinates. Used to label rotation cores with a real
+lat/lon the user can cross-reference against the radar display.
+
 ### `beamHeightKm(slantKm, elevationRad)`
 Height above the tangent plane of a radar gate at the given slant range and
 elevation angle, using the standard 4/3-Earth-radius refractivity model.
@@ -93,6 +98,11 @@ inbound (toward radar), red = outbound. `vmax` is fit to the data per volume.
 ### `vortToColor(vort, vmax)` / `vortLegendStops(vmax)`
 Vertical vorticity (s⁻¹) on a PuOr diverging scale: purple = anticyclonic,
 orange = cyclonic. Legend ticks are labeled in 10⁻³ s⁻¹.
+
+### `lobeColor(q)`
+Green ground shading for the dual-Doppler lobe overlay, brightening with the
+beam-crossing quality `q` (`|sin β|`). Green keeps it distinct from the radar
+data and the cyan range rings.
 
 ---
 
@@ -517,9 +527,11 @@ Colored dot (yellow for WSR-88D, cyan for TDWR) plus a translucent stem
 comes from the precomputed `enu` offset.
 
 #### `_makeRotationCore(core, vmax)`
-A translucent vertical column + ground ring at a detected rotation core,
-tinted by `vortToColor(core.vort, vmax)` so cyclonic (orange) vs anticyclonic
-(purple) reads at a glance.
+A ground-anchored pin at a detected rotation core: a thin vertical locator
+stem up to the core's altitude, capped by a horizontal ring + bead tinted by
+`vortToColor(core.vort, vmax)` (orange = cyclonic, purple = anticyclonic). The
+cap lives in the horizontal plane so its apparent size stays stable under
+vertical exaggeration; only the stem stretches, which correctly tracks height.
 
 #### `_resize()` / `_animate()`
 Standard three.js DPR-aware resize and `requestAnimationFrame` loop.
@@ -670,7 +682,9 @@ count, and a station bitmask — rather than storing every sample.
 Projects one volume's VEL gates into the grid: computes each gate's ENU
 position and the horizontal beam unit vector `(a, b)`, then accumulates the
 normal equations weighted by `cos²(elevation)` (down-weighting high tilts).
-Only tilts ≤ `maxElevDeg` (default 7°) are used.
+Only tilts ≤ `maxElevDeg` (default 7°) are used. `opts.shiftE/shiftN`
+apply an **advection** offset (km) so a volume scanned before the reference
+time is moved downstream to align with the others.
 
 ### `solveGrid(grid, opts)`
 Per cell with ≥2 contributing radars, solves the 2×2 system for `(u, v)`.
@@ -684,12 +698,27 @@ differences against same-height neighbours.
 Cells whose `|ζ|` exceeds `vortMin` (default 0.005 s⁻¹), reduced to one core
 per rotation by Euclidean non-maximum suppression.
 
-### `buildRotationField(mosaic, opts) → { points, cores, qc }`
+### `crossingQualityAt(eKm, nKm, radars)` / `computeLobeGrid(radars, radiusKm, opts)`
+`crossingQualityAt` returns the best beam-crossing quality (`|sin β|`) among
+all radar pairs viewing a point — 0 along a baseline, 1 at a 90° cross.
+`computeLobeGrid` samples it over a horizontal grid to produce the
+**dual-Doppler lobe** (where the geometry is trustworthy); it depends only on
+radar positions, not the data, so it shows even where there's no echo.
+
+### `enrichCores(cores, radars, center)`
+Decorates each detected core with a real-world position (`lat`, `lon` via
+`enuKmToLonLat`, `heightKm`, `rangeKm`, `bearingDeg`) and a trust flag
+(`qGeom`, `inLobe`) so the UI can list and locate it.
+
+### `buildRotationField(mosaic, opts) → { points, cores, lobe, qc }`
 Orchestrates the above over a mosaic's already-cached per-station volumes (no
-refetch — the same volumes the reflectivity composite uses). Stashes the result
-on `mosaic.rotation`. `qc` reports radars contributing velocity, scan-time
-spread, and — for non-synthetic data — an aliasing caveat (raw Level II
-velocity is not dealiased, so folded gates can distort the retrieval).
+refetch — the same volumes the reflectivity composite uses). Computes a
+reference time and a per-radar advection offset from `opts.advection`
+(`{u, v}` m/s, default off), enriches the cores, and builds the lobe grid.
+Stashes the result on `mosaic.rotation`. `qc` reports radars contributing
+velocity, scan-time spread, whether advection is on, and — for non-synthetic
+data — an aliasing caveat (raw Level II velocity is not dealiased, so folded
+gates can distort the retrieval).
 
 ---
 
@@ -701,16 +730,26 @@ base flow plus a cyclonic Rankine vortex), so a correct synthesis must recover
 that field and the vorticity must peak at the prescribed vortex. Being
 analytic, the scene is free of velocity aliasing. `buildSyntheticMosaic(opts)`
 returns a mosaic object compatible with `revoxelizeMosaic` (REF) and
-`buildRotationField` (VEL).
+`buildRotationField` (VEL). An optional `motion` (m/s) + `spreadSec` make each
+radar see the vortex at its own scan time, displaced along the motion vector —
+the exact situation advection correction is built to undo, so the harness can
+validate it.
 
 ## Rotation in the renderer / UI
 
 - `renderer.js` tracks `mosaicProduct` (`'REF'` | `'ROT'`). `_renderRotation`
   colors each solved cell by vorticity (`vortToColor`, data-fit symmetric
-  domain) and drops a translucent column marker on each detected core. The
-  rotation display filter (`vortMinShow`, in 10⁻³ s⁻¹) hides weak cells.
+  domain), draws the lobe overlay (`_setLobe`, green ground dots), and drops a
+  compact pin marker (`_makeRotationCore` — a ground-anchored stem capped by a
+  ring/bead that stays sized sensibly under vertical exaggeration) on each core.
+  `setShowLobe` toggles the overlay; `focusOn(e, n, u)` flies the camera to a
+  core. The display filter `vortMinShow` (10⁻³ s⁻¹) hides weak cells.
 - `app.js` makes the Product dropdown mode-aware: single radar offers REF/VEL,
   mosaic offers REF/ROT. Selecting ROT synthesizes the rotation field lazily
-  (under a loader) from the cached volumes, then surfaces QC toasts. A
-  **synthetic rotation demo** button builds the synthetic scene and renders it
-  immediately.
+  (under a loader) from the cached volumes, then surfaces QC toasts. The
+  **Rotation tools** panel (visible in mosaic+ROT) adds the lobe-overlay toggle,
+  a **storm-motion** control (`readStormMotion` → advection vector; editing it
+  re-synthesizes), and a **core inspector** (`updateRotationPanel`) listing each
+  core's strength/sense/height/position with an in-lobe badge — clicking a row
+  calls `scene.focusOn`. A **synthetic rotation demo** button renders the
+  synthetic scene immediately.

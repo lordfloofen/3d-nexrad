@@ -106,7 +106,12 @@ function buildRadarVolume(station, center, field, vortex, opts) {
 export function buildSyntheticMosaic(opts = {}) {
   const center = opts.center || { lat: 35.0, lon: -97.5, elev: 350 };
   const vortex = opts.vortex || { e: 0, n: 0 };
-  const field = makeField({ vortexE: vortex.e, vortexN: vortex.n, vmax: opts.vmax ?? 25, rmKm: opts.rmKm ?? 3 });
+  const vmax = opts.vmax ?? 25, rmKm = opts.rmKm ?? 3;
+  // Storm motion (m/s east/north) and per-radar scan-time spread (s). With
+  // motion, each radar sees the vortex at its own scan time, displaced along the
+  // motion vector — exactly the situation advection correction is meant to undo.
+  const motion = opts.motion || { u: 0, v: 0 };
+  const spreadSec = opts.spreadSec ?? 60;
 
   // Three virtual radars ~45 km from centre on different bearings, so the
   // vortex sits well inside the dual-Doppler lobes of every pair.
@@ -117,13 +122,20 @@ export function buildSyntheticMosaic(opts = {}) {
   ];
   const stationDefs = opts.stations || defaults;
 
-  const now = Date.now();
-  const stations = stationDefs.map((s, i) => ({
-    station: s,
-    time: new Date(now - i * 60 * 1000), // small, realistic scan-time spread
-    key: `${s.id}/synthetic`,
-    volume: buildRadarVolume(s, center, field, vortex, opts),
-  }));
+  const now = Date.now(); // reference time the vortex sits at `vortex`
+  const stations = stationDefs.map((s, i) => {
+    const timeMs = now - i * spreadSec * 1000;
+    const dtSec = (timeMs - now) / 1000; // <= 0 for earlier scans
+    // Where this radar actually sees the vortex, given the storm's motion.
+    const vp = { e: vortex.e + motion.u * dtSec / 1000, n: vortex.n + motion.v * dtSec / 1000 };
+    const field = makeField({ vortexE: vp.e, vortexN: vp.n, vmax, rmKm });
+    return {
+      station: s,
+      time: new Date(timeMs),
+      key: `${s.id}/synthetic`,
+      volume: buildRadarVolume(s, center, field, vp, opts),
+    };
+  });
 
   return {
     center,

@@ -24,6 +24,16 @@ export function lonLatToEnuKm(lat, lon, elevM, lat0, lon0, elev0M) {
   return { e, n, u };
 }
 
+// Inverse of lonLatToEnuKm: a local East/North offset (km) from (lat0, lon0)
+// back to geographic { lat, lon }. Used to label rotation cores with a real
+// position the user can cross-reference against the radar display.
+export function enuKmToLonLat(eKm, nKm, lat0, lon0) {
+  const φ0 = deg2rad(lat0);
+  const lat = lat0 + (nKm / R_EARTH_KM) * (180 / Math.PI);
+  const lon = lon0 + (eKm / (R_EARTH_KM * Math.cos(φ0))) * (180 / Math.PI);
+  return { lat, lon };
+}
+
 // 4/3-earth beam height for a given slant range (km) and elevation angle (rad).
 const R_EFFECTIVE_KM = R_EARTH_KM * 4 / 3;
 export function beamHeightKm(slantKm, elevationRad) {

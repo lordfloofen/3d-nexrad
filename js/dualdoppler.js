@@ -23,8 +23,9 @@
 // Rotation is then the vertical vorticity ζ = ∂v/∂x − ∂u/∂y of the retrieved
 // field, computed by central differences on the synthesis grid.
 
-import { lonLatToEnuKm, beamHeightKm } from './geo.js';
+import { lonLatToEnuKm, enuKmToLonLat, beamHeightKm } from './geo.js';
 import { tiltMoment } from './nexrad.js';
+import { stationGateKm } from './stations.js';
 
 class DualDopplerGrid {
   constructor(sizeXkm = 2, sizeYkm = 2, sizeZkm = 1) {
@@ -66,8 +67,15 @@ function ingestVelocity(grid, volume, station, center, bit, opts) {
     center.lat, center.lon, center.elev ?? 0
   );
   const stride = opts.stride || 2;
-  const maxRangeKm = opts.maxRangeKm ?? 230;
+  // Per-station usable gate range, matching the REF mosaic's ingestVolume:
+  // a TDWR only reaches ~90 km, a WSR-88D ~230 km.
+  const maxRangeKm = opts.maxRangeKm ?? stationGateKm(station);
   const maxElevDeg = opts.maxElevDeg ?? 7; // low tilts only: keeps the neglected-w error small
+  // Storm-motion advection: this volume was scanned `dt` before the reference
+  // time, so shift its gates downstream to where the storm has since moved,
+  // aligning features across radars that didn't scan simultaneously.
+  const shiftE = opts.shiftE || 0;
+  const shiftN = opts.shiftN || 0;
 
   for (const tilt of volume.tilts) {
     if (tilt.elevationDeg > maxElevDeg) continue;
@@ -100,7 +108,7 @@ function ingestVelocity(grid, volume, station, center, bit, opts) {
         const dz = heightKm;
         const L = Math.hypot(dx, dy, dz) || 1;
         const a = dx / L, b = dy / L; // horizontal beam components (c = dz/L neglected)
-        grid.add(e0 + dx, n0 + dy, u0 + heightKm, a, b, vr, weight, bit);
+        grid.add(e0 + dx + shiftE, n0 + dy + shiftN, u0 + heightKm, a, b, vr, weight, bit);
       }
     }
   }
@@ -186,13 +194,94 @@ function nmsCores(candidates, maxCores, radiusKm = 4) {
   return cores;
 }
 
+// Dual-Doppler crossing quality at a reference-time point: |sin β| of the best
+// beam-crossing angle among all radar pairs viewing it. 0 along a baseline
+// (parallel beams, no skill), 1 when a pair views it at 90°. A pair only counts
+// if *both* radars are within their own usable range (`radar.range`, km) — so a
+// WSR-88D + TDWR pair can't claim coverage out at 230 km where the TDWR (~90 km)
+// has nothing. Under advection the gate that lands at the reference point came
+// from `point − shift` for that radar, so each radar's vector is evaluated
+// against its own pre-advection point (`radar.shiftE/shiftN`, km) to stay
+// consistent with the beam directions ingestVelocity actually used. radars is a
+// list of { e, n, range, shiftE, shiftN } in the mosaic ENU frame.
+function crossingQualityAt(eKm, nKm, radars) {
+  let best = 0;
+  for (let i = 0; i < radars.length; i++) {
+    const ax = radars[i].e - eKm + (radars[i].shiftE || 0);
+    const ay = radars[i].n - nKm + (radars[i].shiftN || 0);
+    const al = Math.hypot(ax, ay) || 1e-6;
+    if (al > (radars[i].range ?? Infinity)) continue;
+    for (let j = i + 1; j < radars.length; j++) {
+      const bx = radars[j].e - eKm + (radars[j].shiftE || 0);
+      const by = radars[j].n - nKm + (radars[j].shiftN || 0);
+      const bl = Math.hypot(bx, by) || 1e-6;
+      if (bl > (radars[j].range ?? Infinity)) continue;
+      const q = Math.abs((ax * by - ay * bx) / (al * bl)); // |sin(angle between)|
+      if (q > best) best = q;
+    }
+  }
+  return best;
+}
+
+// Sample the dual-Doppler lobe (where the geometry is good enough to trust)
+// over a horizontal grid. Depends only on radar positions, not the data, so it
+// shows even where there's no echo — but is clipped to where at least one pair
+// of radars is actually in range, so it can't overstate coverage.
+function computeLobeGrid(radars, radiusKm, opts) {
+  if (radars.length < 2) return { spacingKm: 0, nodes: [] };
+  const spacing = opts.lobeSpacingKm ?? 6;
+  // Default the floor to the solve threshold so the overlay only greens cells
+  // the ROT product can actually retrieve (solveGrid drops q < qMin).
+  const qFloor = opts.lobeQFloor ?? opts.qMin ?? 0.5;
+  const R = radiusKm * 1.15;
+  const nodes = [];
+  for (let e = -R; e <= R; e += spacing) {
+    for (let n = -R; n <= R; n += spacing) {
+      if (Math.hypot(e, n) > R) continue;
+      const q = crossingQualityAt(e, n, radars);
+      if (q >= qFloor) nodes.push({ e, n, q });
+    }
+  }
+  return { spacingKm: spacing, nodes };
+}
+
+// Decorate each detected core with a real-world position and a trust flag so
+// the UI can list and locate it.
+function enrichCores(cores, radars, center) {
+  return cores.map(c => {
+    const { lat, lon } = enuKmToLonLat(c.x, c.y, center.lat, center.lon);
+    const qGeom = crossingQualityAt(c.x, c.y, radars);
+    return {
+      ...c,
+      lat, lon,
+      heightKm: c.z,
+      rangeKm: Math.hypot(c.x, c.y),
+      bearingDeg: (Math.atan2(c.x, c.y) * 180 / Math.PI + 360) % 360, // from center, 0 = N
+      qGeom,
+      inLobe: qGeom >= (radars.length ? 0.5 : 0),
+    };
+  });
+}
+
 // Build the rotation field for a mosaic from its already-cached per-station
 // volumes (the same ones the reflectivity composite uses — no refetch needed).
-// Returns { points, cores, qc } and also stashes it on mosaic.rotation.
+// Returns { points, cores, lobe, qc } and also stashes it on mosaic.rotation.
 export function buildRotationField(mosaic, opts = {}) {
   const voxel = mosaic.voxelSize || { x: 2, y: 2, z: 1 };
   const grid = new DualDopplerGrid(voxel.x, voxel.y, Math.max(0.5, voxel.z));
   const entries = mosaic.stations || [];
+  const center = mosaic.center;
+
+  // Reference time that every radar's gates are advected to.
+  const times = entries.map(e => e.time && e.time.getTime()).filter(Boolean);
+  const refMs = mosaic.targetTime instanceof Date
+    ? mosaic.targetTime.getTime()
+    : (times.length ? Math.max(...times) : Date.now());
+  // Storm-motion vector (m/s east, north). Default off.
+  const adv = opts.advection || mosaic.advection || { u: 0, v: 0 };
+  const advecting = !!(adv.u || adv.v);
+
+  const radarsEnu = [];
   let withVel = 0;
   entries.forEach((entry, i) => {
     const volume = entry.volume;
@@ -200,15 +289,27 @@ export function buildRotationField(mosaic, opts = {}) {
     const hasVel = volume.tilts.some(t => tiltMoment(t, 'VEL'));
     if (!hasVel) return;
     withVel++;
-    ingestVelocity(grid, volume, entry.station, mosaic.center, 1 << i, {
+    const s = entry.station;
+    const enu = lonLatToEnuKm(s.lat, s.lon, s.elev, center.lat, center.lon, center.elev ?? 0);
+    const dtSec = (refMs - (entry.time ? entry.time.getTime() : refMs)) / 1000;
+    const shiftE = adv.u * dtSec / 1000; // m/s · s / 1000 = km
+    const shiftN = adv.v * dtSec / 1000;
+    radarsEnu.push({
+      e: enu.e, n: enu.n, id: s.id,
+      range: opts.maxRangeKm ?? stationGateKm(s),
+      shiftE, shiftN,
+    });
+    ingestVelocity(grid, volume, s, center, 1 << i, {
       stride: opts.stride ?? mosaic.stride ?? 2,
       maxRangeKm: opts.maxRangeKm,
       maxElevDeg: opts.maxElevDeg,
+      shiftE, shiftN,
     });
   });
 
   const { points } = solveGrid(grid, opts);
-  const cores = detectCores(points, opts);
+  const cores = enrichCores(detectCores(points, opts), radarsEnu, center);
+  const lobe = computeLobeGrid(radarsEnu, mosaic.radiusKm || 150, opts);
 
   // Velocity from Level II is folded at ±Nyquist and we do not dealias yet, so
   // real-data retrievals can be corrupted (often inside strong rotation, where
@@ -219,9 +320,10 @@ export function buildRotationField(mosaic, opts = {}) {
       ? null
       : 'Raw Level II velocity is not dealiased; folded gates can distort the retrieved winds and rotation.',
     timeSpreadMin: timeSpreadMinutes(entries),
+    advection: advecting ? { ...adv } : null,
   };
 
-  mosaic.rotation = { points, cores, qc };
+  mosaic.rotation = { points, cores, lobe, qc, advection: adv };
   return mosaic.rotation;
 }
 
