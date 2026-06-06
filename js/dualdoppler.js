@@ -194,21 +194,26 @@ function nmsCores(candidates, maxCores, radiusKm = 4) {
   return cores;
 }
 
-// Dual-Doppler crossing quality at a horizontal point: |sin β| of the best
+// Dual-Doppler crossing quality at a reference-time point: |sin β| of the best
 // beam-crossing angle among all radar pairs viewing it. 0 along a baseline
 // (parallel beams, no skill), 1 when a pair views it at 90°. A pair only counts
-// if *both* radars are within their own usable range (`radar.range`, km) of the
-// point — beyond it a radar contributes no gates, so a WSR-88D + TDWR pair can't
-// claim coverage out at 230 km where the TDWR (~90 km) has nothing. radars is a
-// list of { e, n, range } in the mosaic ENU frame.
+// if *both* radars are within their own usable range (`radar.range`, km) — so a
+// WSR-88D + TDWR pair can't claim coverage out at 230 km where the TDWR (~90 km)
+// has nothing. Under advection the gate that lands at the reference point came
+// from `point − shift` for that radar, so each radar's vector is evaluated
+// against its own pre-advection point (`radar.shiftE/shiftN`, km) to stay
+// consistent with the beam directions ingestVelocity actually used. radars is a
+// list of { e, n, range, shiftE, shiftN } in the mosaic ENU frame.
 function crossingQualityAt(eKm, nKm, radars) {
   let best = 0;
   for (let i = 0; i < radars.length; i++) {
-    const ax = radars[i].e - eKm, ay = radars[i].n - nKm;
+    const ax = radars[i].e - eKm + (radars[i].shiftE || 0);
+    const ay = radars[i].n - nKm + (radars[i].shiftN || 0);
     const al = Math.hypot(ax, ay) || 1e-6;
     if (al > (radars[i].range ?? Infinity)) continue;
     for (let j = i + 1; j < radars.length; j++) {
-      const bx = radars[j].e - eKm, by = radars[j].n - nKm;
+      const bx = radars[j].e - eKm + (radars[j].shiftE || 0);
+      const by = radars[j].n - nKm + (radars[j].shiftN || 0);
       const bl = Math.hypot(bx, by) || 1e-6;
       if (bl > (radars[j].range ?? Infinity)) continue;
       const q = Math.abs((ax * by - ay * bx) / (al * bl)); // |sin(angle between)|
@@ -284,14 +289,19 @@ export function buildRotationField(mosaic, opts = {}) {
     withVel++;
     const s = entry.station;
     const enu = lonLatToEnuKm(s.lat, s.lon, s.elev, center.lat, center.lon, center.elev ?? 0);
-    radarsEnu.push({ e: enu.e, n: enu.n, id: s.id, range: opts.maxRangeKm ?? stationGateKm(s) });
     const dtSec = (refMs - (entry.time ? entry.time.getTime() : refMs)) / 1000;
+    const shiftE = adv.u * dtSec / 1000; // m/s · s / 1000 = km
+    const shiftN = adv.v * dtSec / 1000;
+    radarsEnu.push({
+      e: enu.e, n: enu.n, id: s.id,
+      range: opts.maxRangeKm ?? stationGateKm(s),
+      shiftE, shiftN,
+    });
     ingestVelocity(grid, volume, s, center, 1 << i, {
       stride: opts.stride ?? mosaic.stride ?? 2,
       maxRangeKm: opts.maxRangeKm,
       maxElevDeg: opts.maxElevDeg,
-      shiftE: adv.u * dtSec / 1000, // m/s · s / 1000 = km
-      shiftN: adv.v * dtSec / 1000,
+      shiftE, shiftN,
     });
   });
 
