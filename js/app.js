@@ -693,9 +693,14 @@ $('rotation-demo').addEventListener('click', () => {
   showLoader('Building synthetic dual-Doppler scene…');
   setTimeout(() => {
     try {
-      const mosaic = buildSyntheticMosaic({});
+      // Drive the synthetic storm at the selected motion so its scan-time
+      // offsets actually match the advection correction being applied — that
+      // validates the advection path instead of shifting a stationary storm.
+      const motion = readStormMotion();
+      const mosaic = buildSyntheticMosaic({ motion });
       revoxelizeMosaic(mosaic, { stride: mosaic.stride, minDbz: mosaic.minDbz });
-      buildRotationField(mosaic, { advection: readStormMotion() });
+      mosaic.advection = motion;
+      buildRotationField(mosaic, { advection: motion });
 
       const list = $('mosaic-status');
       list.innerHTML = '';
@@ -786,26 +791,39 @@ function updateRotationPanel(mosaic) {
 $('show-lobe').addEventListener('change', (e) => scene.setShowLobe(e.target.checked));
 
 // Editing storm motion re-synthesizes the rotation field with advection on.
+// For a real mosaic the cached volumes are fixed, so we just re-advect and
+// re-solve. For the synthetic demo the storm is ours to define, so we rebuild
+// it moving at the selected motion — otherwise we'd advect a stationary storm
+// and the demo would show displaced cores instead of validating the correction.
 let motionTimer = null;
 function applyStormMotion() {
   const m = scene.lastMosaic;
   if (!m || scene.mode !== 'mosaic' || scene.mosaicProduct !== 'ROT') return;
-  m.advection = readStormMotion();
-  m.rotation = null;
+  const motion = readStormMotion();
   showLoader('Re-synthesizing with storm motion…');
   setTimeout(() => {
+    let target = m;
     try {
-      buildRotationField(m, { advection: m.advection });
+      if (m.synthetic) {
+        target = buildSyntheticMosaic({ motion });
+        revoxelizeMosaic(target, { stride: target.stride, minDbz: target.minDbz });
+        target.advection = motion;
+        buildRotationField(target, { advection: motion });
+      } else {
+        m.advection = motion;
+        m.rotation = null;
+        buildRotationField(m, { advection: motion });
+      }
     } catch (err) {
       console.error(err);
       toast(`Synthesis failed: ${err.message}`, 'warn');
     } finally {
       hideLoader();
     }
-    const info = scene.setMosaic(m);
-    updateMosaicStats(m, info);
+    const info = scene.setMosaic(target);
+    updateMosaicStats(target, info);
     refreshLegend();
-    updateRotationPanel(m);
+    updateRotationPanel(target);
   }, 0);
 }
 ['motion-dir', 'motion-spd'].forEach((id) =>
