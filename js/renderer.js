@@ -464,28 +464,39 @@ export class RadarScene {
     return g;
   }
 
-  // Marker on a detected rotation core: a translucent vertical column at the
-  // cell, tinted by the colormap so cyclonic/anticyclonic reads at a glance.
+  // Marker on a detected rotation core: a thin vertical locator stem from the
+  // ground up to the core's altitude, capped by a horizontal ring + bead tinted
+  // by the colormap so cyclonic/anticyclonic reads at a glance. The cap is in
+  // the horizontal plane so its apparent size stays stable under vertical
+  // exaggeration (only the stem stretches, which correctly tracks altitude).
   _makeRotationCore(core, vmax) {
     const g = new THREE.Group();
-    g.position.set(core.x, core.z, -core.y); // ENU -> world
+    g.position.set(core.x, 0, -core.y); // anchor at ground under the core
     const c = vortToColor(core.vort, vmax);
     const color = new THREE.Color(c[0], c[1], c[2]);
-    const column = new THREE.Mesh(
-      new THREE.CylinderGeometry(1.2, 1.2, 10, 16, 1, true),
-      new THREE.MeshBasicMaterial({
-        color, transparent: true, opacity: 0.45, side: THREE.DoubleSide,
-      })
+    const yTop = Math.max(core.z, 0.5); // core altitude in km (scaled by vexag at render)
+
+    const stem = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.18, 0.18, yTop, 10),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5 })
     );
-    column.position.y = 5;
-    g.add(column);
+    stem.position.y = yTop / 2;
+    g.add(stem);
+
     const ring = new THREE.Mesh(
-      new THREE.RingGeometry(1.4, 2.4, 32),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, side: THREE.DoubleSide })
+      new THREE.RingGeometry(2.0, 2.8, 28),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, side: THREE.DoubleSide })
     );
     ring.rotation.x = -Math.PI / 2;
-    ring.position.y = 0.06;
+    ring.position.y = yTop;
     g.add(ring);
+
+    const bead = new THREE.Mesh(
+      new THREE.SphereGeometry(0.7, 12, 12),
+      new THREE.MeshBasicMaterial({ color })
+    );
+    bead.position.y = yTop;
+    g.add(bead);
     return g;
   }
 
