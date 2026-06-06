@@ -230,7 +230,9 @@ function crossingQualityAt(eKm, nKm, radars) {
 function computeLobeGrid(radars, radiusKm, opts) {
   if (radars.length < 2) return { spacingKm: 0, nodes: [] };
   const spacing = opts.lobeSpacingKm ?? 6;
-  const qFloor = opts.lobeQFloor ?? 0.4;
+  // Default the floor to the solve threshold so the overlay only greens cells
+  // the ROT product can actually retrieve (solveGrid drops q < qMin).
+  const qFloor = opts.lobeQFloor ?? opts.qMin ?? 0.5;
   const R = radiusKm * 1.15;
   const nodes = [];
   for (let e = -R; e <= R; e += spacing) {
