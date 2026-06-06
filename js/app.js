@@ -173,13 +173,14 @@ function setProductOptions(mode) {
 async function selectMosaicProduct(product) {
   applyProductUI(product);
   scene.mosaicProduct = product;
+  updateRotationToolsVisibility();
   const m = scene.lastMosaic;
   if (!m || scene.mode !== 'mosaic') { refreshLegend(); return; }
   if (product === 'ROT' && !m.rotation) {
     showLoader('Synthesizing winds (dual-Doppler)…');
     await new Promise(r => setTimeout(r, 0)); // let the loader paint before the sync solve
     try {
-      buildRotationField(m, {});
+      buildRotationField(m, { advection: readStormMotion() });
     } catch (err) {
       console.error(err);
       toast(`Rotation synthesis failed: ${err.message}`, 'warn');
@@ -190,6 +191,7 @@ async function selectMosaicProduct(product) {
   const info = scene.setMosaicProduct(product);
   if (info) updateMosaicStats(m, info);
   refreshLegend();
+  if (product === 'ROT') updateRotationPanel(m);
   if (product === 'ROT' && m.rotation) {
     const qc = m.rotation.qc;
     if (qc.radarsWithVelocity < 2) {
@@ -248,10 +250,11 @@ $('stride').addEventListener('input', (e) => {
       if (!m) return;
       revoxelizeMosaic(m, { stride: v });
       m.rotation = null; // stride changes the velocity sampling too — re-synthesize lazily
-      if (scene.mosaicProduct === 'ROT') buildRotationField(m, { stride: v });
+      if (scene.mosaicProduct === 'ROT') buildRotationField(m, { stride: v, advection: readStormMotion() });
       const info = scene.setMosaic(m);
       updateMosaicStats(m, info);
       refreshLegend();
+      if (scene.mosaicProduct === 'ROT') updateRotationPanel(m);
     }, 120);
     return;
   }
@@ -289,6 +292,7 @@ tabs.forEach(tab => {
       setProductOptions('single');
       refreshLegend();
     }
+    updateRotationToolsVisibility();
   });
 });
 
@@ -662,11 +666,13 @@ async function runMosaicBuild() {
     // If the rotation product is selected, synthesize before the first render.
     if (scene.mosaicProduct === 'ROT') {
       showLoader('Synthesizing winds (dual-Doppler)…');
-      try { buildRotationField(mosaic, {}); } catch (err) { console.error(err); }
+      try { buildRotationField(mosaic, { advection: readStormMotion() }); } catch (err) { console.error(err); }
     }
     const info = scene.setMosaic(mosaic);
     updateMosaicStats(mosaic, info);
     refreshLegend();
+    updateRotationToolsVisibility();
+    if (scene.mosaicProduct === 'ROT') updateRotationPanel(mosaic);
     toast(`Mosaic built from ${mosaic.stations.length} radars (${mosaic.points.length.toLocaleString()} voxels).`);
   } catch (err) {
     console.error(err);
@@ -689,7 +695,7 @@ $('rotation-demo').addEventListener('click', () => {
     try {
       const mosaic = buildSyntheticMosaic({});
       revoxelizeMosaic(mosaic, { stride: mosaic.stride, minDbz: mosaic.minDbz });
-      buildRotationField(mosaic, {});
+      buildRotationField(mosaic, { advection: readStormMotion() });
 
       const list = $('mosaic-status');
       list.innerHTML = '';
@@ -706,9 +712,11 @@ $('rotation-demo').addEventListener('click', () => {
       activeMode = 'mosaic';
       scene.mosaicProduct = 'ROT';
       setProductOptions('mosaic');
+      updateRotationToolsVisibility();
       const info = scene.setMosaic(mosaic);
       updateMosaicStats(mosaic, info);
       refreshLegend();
+      updateRotationPanel(mosaic);
       const cores = mosaic.rotation.cores.length;
       toast(`Synthetic dual-Doppler: ${mosaic.stations.length} radars, ${cores} rotation core${cores !== 1 ? 's' : ''} detected.`);
     } catch (err) {
@@ -719,4 +727,91 @@ $('rotation-demo').addEventListener('click', () => {
     }
   }, 0);
 });
+
+// ---------- Rotation tools (lobe overlay, storm motion, core inspector) ----------
+// Storm motion from the UI as an ENU velocity (m/s). Direction is the
+// meteorological "from" bearing; the motion vector points the opposite way.
+function readStormMotion() {
+  const dir = parseFloat($('motion-dir').value) || 0;
+  const kt = parseFloat($('motion-spd').value) || 0;
+  const spd = kt * 0.514444; // knots -> m/s
+  const r = dir * Math.PI / 180;
+  return { u: -spd * Math.sin(r), v: -spd * Math.cos(r) };
+}
+
+function updateRotationToolsVisibility() {
+  const show = activeMode === 'mosaic' && scene.mosaicProduct === 'ROT';
+  $('rotation-tools').classList.toggle('hidden', !show);
+}
+
+// Populate the QC line and the clickable list of detected rotation cores.
+function updateRotationPanel(mosaic) {
+  const rot = mosaic && mosaic.rotation;
+  const meta = $('rotation-meta');
+  const list = $('core-list');
+  list.innerHTML = '';
+  if (!rot) { meta.textContent = '—'; return; }
+  const qc = rot.qc;
+  meta.textContent =
+    `${qc.radarsWithVelocity} radars · scan spread ${qc.timeSpreadMin.toFixed(1)} min · ` +
+    `advection ${qc.advection ? 'on' : 'off'}`;
+  if (!rot.cores.length) {
+    const d = document.createElement('div');
+    d.className = 'core-empty';
+    d.textContent = 'No rotation cores above threshold.';
+    list.appendChild(d);
+    return;
+  }
+  const vmax = scene.lastVortMax || 0.02;
+  rot.cores.forEach((c) => {
+    const col = vortToColor(c.vort, vmax);
+    const rgb = `rgb(${(col[0] * 255) | 0},${(col[1] * 255) | 0},${(col[2] * 255) | 0})`;
+    const sense = c.sign > 0 ? 'cyclonic' : 'anticyclonic';
+    const milli = (Math.abs(c.vort) * 1000).toFixed(1);
+    const badge = c.inLobe
+      ? '<span class="core-badge good">in lobe</span>'
+      : '<span class="core-badge weak">weak geom</span>';
+    const row = document.createElement('div');
+    row.className = 'core-row';
+    row.innerHTML =
+      `<span class="core-dot" style="background:${rgb}"></span>` +
+      `<span class="core-main"><b>${milli}×10⁻³ s⁻¹</b> ${sense}<br>` +
+      `<span class="core-sub">${c.heightKm.toFixed(1)} km AGL · ${c.lat.toFixed(2)}°, ${c.lon.toFixed(2)}°</span></span>` +
+      badge;
+    row.addEventListener('click', () => scene.focusOn(c.x, c.y, c.z));
+    list.appendChild(row);
+  });
+}
+
+$('show-lobe').addEventListener('change', (e) => scene.setShowLobe(e.target.checked));
+
+// Editing storm motion re-synthesizes the rotation field with advection on.
+let motionTimer = null;
+function applyStormMotion() {
+  const m = scene.lastMosaic;
+  if (!m || scene.mode !== 'mosaic' || scene.mosaicProduct !== 'ROT') return;
+  m.advection = readStormMotion();
+  m.rotation = null;
+  showLoader('Re-synthesizing with storm motion…');
+  setTimeout(() => {
+    try {
+      buildRotationField(m, { advection: m.advection });
+    } catch (err) {
+      console.error(err);
+      toast(`Synthesis failed: ${err.message}`, 'warn');
+    } finally {
+      hideLoader();
+    }
+    const info = scene.setMosaic(m);
+    updateMosaicStats(m, info);
+    refreshLegend();
+    updateRotationPanel(m);
+  }, 0);
+}
+['motion-dir', 'motion-spd'].forEach((id) =>
+  $(id).addEventListener('input', () => {
+    clearTimeout(motionTimer);
+    motionTimer = setTimeout(applyStormMotion, 400);
+  })
+);
 

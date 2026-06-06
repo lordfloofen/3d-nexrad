@@ -135,3 +135,13 @@ export function vortLegendStops(vmax = 0.02) {
     milli: Math.round(f * vmax * 1000),
   }));
 }
+
+// --- Dual-Doppler lobe (geometry quality) --------------------------------
+
+// Green ground shading for the dual-Doppler lobe, brightening with crossing
+// quality q (|sin β|, ~0.4 at the lobe edge up to 1.0 at an ideal 90° cross).
+// Green keeps it distinct from the radar data and the cyan range rings.
+export function lobeColor(q) {
+  const t = Math.max(0, Math.min(1, (q - 0.4) / 0.6));
+  return [0.12 + 0.06 * t, 0.40 + 0.50 * t, 0.22 + 0.18 * t];
+}

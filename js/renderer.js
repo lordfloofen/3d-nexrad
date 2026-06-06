@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { dbzToColor, velToColor, vortToColor } from './colormap.js';
+import { dbzToColor, velToColor, vortToColor, lobeColor } from './colormap.js';
 import { tiltMoment } from './nexrad.js';
 import { beamHeightKm, lonLatToEnuKm } from './geo.js';
 import { createOsmGround } from './osm-ground.js';
@@ -53,6 +53,8 @@ export class RadarScene {
     this._basemapAttribution = null;
 
     this.points = null;
+    this.lobe = null;          // dual-Doppler lobe overlay (mosaic ROT only)
+    this._showLobe = true;
     this.mode = null;          // 'volume' | 'mosaic'
     this.product = 'REF';      // 'REF' | 'VEL' (single-radar volumes only)
     this.mosaicProduct = 'REF';// 'REF' | 'ROT' (multi-radar mosaics)
@@ -84,7 +86,22 @@ export class RadarScene {
     this._showBasemap = v;
     this.basemap.visible = v;
   }
+  setShowLobe(v) {
+    this._showLobe = v;
+    if (this.lobe) this.lobe.visible = v;
+  }
   getBasemapAttribution() { return this._basemapAttribution; }
+
+  // Fly the camera to look at a point given in ENU km (e.g. a rotation core),
+  // keeping the current viewing direction but framing it from a short distance.
+  focusOn(eKm, nKm, uKm = 1) {
+    const target = new THREE.Vector3(eKm, uKm * this.world.scale.y, -nKm);
+    const dir = this.camera.position.clone().sub(this.controls.target).normalize();
+    const dist = 45;
+    this.controls.target.copy(target);
+    this.camera.position.copy(target).addScaledVector(dir, dist);
+    this.controls.update();
+  }
 
   // The product actually displayed: single-radar volumes use `product`
   // (REF/VEL); mosaics use `mosaicProduct` (REF reflectivity composite, or ROT
@@ -130,6 +147,7 @@ export class RadarScene {
     this.lastMosaic = null;
     this._clearPoints();
     this._clearMarkers();
+    this._clearLobe();
     this._resizeDecorations(230);
     if (Number.isFinite(volume?.lat) && Number.isFinite(volume?.lon)) {
       this._setBasemap(volume.lat, volume.lon, 230);
@@ -216,6 +234,7 @@ export class RadarScene {
     this.lastVolume = null;
     this._clearPoints();
     this._clearMarkers();
+    this._clearLobe();
 
     const radius = Math.max(120, mosaic.radiusKm || 250);
     this._resizeDecorations(radius);
@@ -297,6 +316,7 @@ export class RadarScene {
       if (a > peak) peak = a;
     }
     this._installPoints(positions, colors);
+    this._setLobe(mosaic.rotation.lobe);
 
     for (const core of cores) this.markers.add(this._makeRotationCore(core, vmax));
 
@@ -338,6 +358,38 @@ export class RadarScene {
     this.points.geometry.dispose();
     this.points.material.dispose();
     this.points = null;
+  }
+
+  // Dual-Doppler lobe overlay: translucent green ground dots over the region
+  // where the multi-radar geometry is good enough to trust the retrieval.
+  _setLobe(lobe) {
+    this._clearLobe();
+    if (!lobe || !lobe.nodes || !lobe.nodes.length) return;
+    const positions = [];
+    const colors = [];
+    for (const nd of lobe.nodes) {
+      positions.push(nd.e, 0.1, -nd.n); // sit just above the ground plane
+      const c = lobeColor(nd.q);
+      colors.push(c[0], c[1], c[2]);
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    const mat = new THREE.PointsMaterial({
+      size: 7, vertexColors: true, sizeAttenuation: false,
+      transparent: true, opacity: 0.35, depthWrite: false,
+    });
+    this.lobe = new THREE.Points(geom, mat);
+    this.lobe.visible = this._showLobe;
+    this.world.add(this.lobe);
+  }
+
+  _clearLobe() {
+    if (!this.lobe) return;
+    this.world.remove(this.lobe);
+    this.lobe.geometry.dispose();
+    this.lobe.material.dispose();
+    this.lobe = null;
   }
 
   _clearMarkers() {

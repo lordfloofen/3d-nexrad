@@ -102,6 +102,12 @@ GitHub Pages on every push to `main`. To enable:
   QC warning is shown. The bundled *synthetic rotation demo* (several virtual
   radars sampling a shared wind field with a known vortex) is alias-free and
   validates the method end to end.
+- **Rotation tools** make the retrieval usable on real storms: a green
+  **dual-Doppler lobe overlay** shows where the geometry is trustworthy; a
+  **storm-motion** control advects each radar's scan to a common time before
+  synthesis (radars don't scan simultaneously, so a moving storm otherwise
+  smears); and a **core inspector** lists detected rotation cores (strength,
+  sense, height, lat/lon, in-lobe flag) — click one to fly the camera to it.
 
 ## License
 
